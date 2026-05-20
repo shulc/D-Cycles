@@ -1,0 +1,4 @@
+[submodule "extern/blender"]
+	path = extern/blender
+	url = https://projects.blender.org/blender/blender.git
+	branch = blender-v4.5-release

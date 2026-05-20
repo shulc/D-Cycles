@@ -1,0 +1,14 @@
+{
+    "name": "triangle",
+    "description": "Phase 0c target: Cycles equivalent of D-RadeonProRender/examples/triangle. Currently a smoke test that probes the stub.",
+    "license": "BSL-1.0",
+    "authors": ["Alexander Shagarov"],
+
+    "targetType": "executable",
+    "mainSourceFile": "source/app.d",
+    "sourcePaths": ["source"],
+
+    "dependencies": {
+        "d-cycles": { "path": "../../" }
+    }
+}

@@ -1,0 +1,24 @@
+{
+    "name": "d-cycles",
+    "description": "D bindings for a thin C shim around Blender's Cycles X path tracer. Phase 0 scaffold: stub C library compiles; real Cycles wiring is Phase 0c TODO.",
+    "license": "BSL-1.0",
+    "authors": ["Alexander Shagarov"],
+
+    "targetType": "staticLibrary",
+
+    "sourcePaths": ["source"],
+    "importPaths": ["source"],
+
+    "preBuildCommands-posix": [
+        "cd \"$PACKAGE_DIR\" && cmake -S \"$PACKAGE_DIR\" -B \"$PACKAGE_DIR/build\" -DCMAKE_BUILD_TYPE=Release",
+        "cmake --build \"$PACKAGE_DIR/build\" -j --target cyclesc"
+    ],
+
+    "lflags-posix": [
+        "-L$PACKAGE_DIR/build"
+    ],
+
+    "libs-posix": ["cyclesc", "stdc++"],
+    "libs-osx":   ["cyclesc", "c++"],
+    "libs-windows": ["cyclesc"]
+}
