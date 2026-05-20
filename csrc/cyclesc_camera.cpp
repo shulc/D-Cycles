@@ -80,13 +80,20 @@ cyc_status cyc_camera_lookat(cyc_camera_t *h,
     };
     const ccl::float3 z_axis = normalize(tx - ex, ty - ey, tz - ez);
     const ccl::float3 up_raw = ccl::make_float3(ux, uy, uz);
-    /* LH frame: right = up x forward; up_corrected = forward x right. */
-    ccl::float3 x_axis = cross(up_raw, z_axis);
+    /* RH frame: right = forward × up; up_corrected = right × forward.
+     * Earlier LH formulation (right = up × forward, up_corrected =
+     * forward × right) flipped the x_axis sign and produced
+     * horizontally-mirrored renders relative to what (eye, target, up)
+     * physically describes — verified empirically in vibe3d IPR vs its
+     * OpenGL viewport side-by-side. The doc-comment above (which says
+     * "X column = forward x up") is the correct intent; the old code
+     * just didn't match it. */
+    ccl::float3 x_axis = cross(z_axis, up_raw);
     {
         const float n = std::sqrt(x_axis.x*x_axis.x + x_axis.y*x_axis.y + x_axis.z*x_axis.z);
         if (n > 0) x_axis = ccl::make_float3(x_axis.x/n, x_axis.y/n, x_axis.z/n);
     }
-    const ccl::float3 y_axis = cross(z_axis, x_axis);
+    const ccl::float3 y_axis = cross(x_axis, z_axis);
 
     ccl::Transform tfm;
     tfm.x = ccl::make_float4(x_axis.x, y_axis.x, z_axis.x, ex);
