@@ -1,6 +1,6 @@
 {
     "name": "d-cycles",
-    "description": "D bindings for a thin C shim around Blender's Cycles X path tracer. Phase 0 scaffold: stub C library compiles; real Cycles wiring is Phase 0c TODO.",
+    "description": "D bindings for a thin C shim around Blender's Cycles X path tracer. Self-contained: lflags below pull in all transitive Cycles static libs + Blender precompiled deps (OIIO, OIDN, Embree, TBB, etc.).",
     "license": "BSL-1.0",
     "authors": ["Alexander Shagarov"],
 
@@ -10,15 +10,68 @@
     "importPaths": ["source"],
 
     "preBuildCommands-posix": [
-        "cd \"$PACKAGE_DIR\" && cmake -S \"$PACKAGE_DIR\" -B \"$PACKAGE_DIR/build\" -DCMAKE_BUILD_TYPE=Release",
+        "cd \"$PACKAGE_DIR\" && cmake -S \"$PACKAGE_DIR\" -B \"$PACKAGE_DIR/build\" -DCMAKE_BUILD_TYPE=Release -DWITH_CYCLES=ON",
         "cmake --build \"$PACKAGE_DIR/build\" -j --target cyclesc"
     ],
 
     "lflags-posix": [
-        "-L$PACKAGE_DIR/build"
+        "-L$PACKAGE_DIR/build",
+        "-L$PACKAGE_DIR/extern/blender/build_cycles/lib",
+
+        "-rpath=$PACKAGE_DIR/extern/blender/lib/linux_x64/openimageio/lib",
+        "-rpath=$PACKAGE_DIR/extern/blender/lib/linux_x64/opencolorio/lib",
+        "-rpath=$PACKAGE_DIR/extern/blender/lib/linux_x64/embree/lib",
+        "-rpath=$PACKAGE_DIR/extern/blender/lib/linux_x64/openimagedenoise/lib",
+        "-rpath=$PACKAGE_DIR/extern/blender/lib/linux_x64/openexr/lib",
+        "-rpath=$PACKAGE_DIR/extern/blender/lib/linux_x64/imath/lib",
+        "-rpath=$PACKAGE_DIR/extern/blender/lib/linux_x64/opensubdiv/lib",
+        "-rpath=$PACKAGE_DIR/extern/blender/lib/linux_x64/dpcpp/lib",
+        "-rpath=$PACKAGE_DIR/extern/blender/lib/linux_x64/tbb/lib",
+
+        "--start-group",
+        "$PACKAGE_DIR/build/libcyclesc.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_session.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_scene.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_kernel.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_device.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_integrator.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_bvh.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_subd.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_graph.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_util.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libbf_intern_libc_compat.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libbf_intern_guardedalloc.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libbf_intern_sky.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libextern_glog.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libextern_gflags.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libextern_cuew.a",
+        "--end-group",
+
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/openimageio/lib/libOpenImageIO.so",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/openimageio/lib/libOpenImageIO_Util.so",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/opencolorio/lib/libOpenColorIO.so",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/embree/lib/libembree4.so",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/openimagedenoise/lib/libOpenImageDenoise.so",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/openexr/lib/libOpenEXR.so",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/openexr/lib/libOpenEXRCore.so",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/openexr/lib/libIex.so",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/openexr/lib/libIlmThread.so",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/imath/lib/libImath.so",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/opensubdiv/lib/libosdCPU.so",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/dpcpp/lib/libsycl.so",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/tbb/lib/libtbb.so",
+
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/pugixml/lib/libpugixml.a",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/png/lib/libpng16.a",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/jpeg/lib/libjpeg.a",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/tiff/lib/libtiff.a",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/openjpeg/lib/libopenjp2.a",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/webp/lib/libwebp.a",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/zlib/lib/libz.a",
+        "$PACKAGE_DIR/extern/blender/lib/linux_x64/zstd/lib/libzstd.a"
     ],
 
-    "libs-posix": ["cyclesc", "stdc++"],
-    "libs-osx":   ["cyclesc", "c++"],
+    "libs-posix":   ["stdc++", "pthread", "m", "dl"],
+    "libs-osx":     ["c++", "pthread", "m", "dl"],
     "libs-windows": ["cyclesc"]
 }
