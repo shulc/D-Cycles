@@ -34,8 +34,22 @@ int main(string[] args)
     }
 
     // 2. Session ------------------------------------------------------
+    // Default to OPTIX (RT-cores on NVIDIA), fall back to CPU if not
+    // available. Override via CYC_DEVICE env var (CPU / CUDA / OPTIX).
+    auto pick_device = () {
+        import std.process : environment;
+        const env = environment.get("CYC_DEVICE", "OPTIX");
+        switch (env) {
+            case "CPU":    return cyc_device_type.CPU;
+            case "CUDA":   return cyc_device_type.CUDA;
+            case "OPTIX":  return cyc_device_type.OPTIX;
+            case "HIP":    return cyc_device_type.HIP;
+            case "METAL":  return cyc_device_type.METAL;
+            default:       return cyc_device_type.CPU;
+        }
+    };
     cyc_session_params sp = {
-        device_type:  cyc_device_type.CPU,
+        device_type:  pick_device(),
         device_index: 0,
         samples:      64,
         threads:      0,
@@ -43,6 +57,7 @@ int main(string[] args)
         use_denoiser: 0,
         interactive:  0,
     };
+    writefln("Trying device: %s", sp.device_type);
     cyc_session_t* session;
     check(cyc_session_create(&sp, &session), "session_create");
     scope(exit) cyc_session_destroy(session);
@@ -98,9 +113,13 @@ int main(string[] args)
 
     // 6. Render -------------------------------------------------------
     check(cyc_session_reset(session, 512, 512), "session_reset");
-    writeln("Rendering 512x512 @ 64 samples on CPU...");
+    writefln("Rendering 512x512 @ 64 samples on %s...", sp.device_type);
+    import std.datetime.stopwatch : StopWatch, AutoStart;
+    auto sw = StopWatch(AutoStart.yes);
     check(cyc_session_start(session), "session_start");
     check(cyc_session_wait(session), "session_wait");
+    sw.stop();
+    writefln("Render finished in %s ms", sw.peek.total!"msecs");
 
     const char* out_path = "triangle.png".toStringz;
     check(cyc_session_save_image(session, out_path), "session_save_image");

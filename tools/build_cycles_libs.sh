@@ -12,17 +12,30 @@
 # from D-Cycles' own CMakeLists.txt.
 #
 # Output:
-#   extern/blender/build_cycles/intern/cycles/{session,scene,kernel,
-#     device,bvh,subd,graph,util}/libcycles_*.a
-#   extern/blender/build_cycles/intern/{libc_compat,guardedalloc,sky}/
-#     libbf_intern_*.a
+#   extern/blender/build_cycles/lib/libcycles_*.a
+#   extern/blender/build_cycles/lib/libbf_intern_*.a
+#
+# GPU support (opt-in via env vars):
+#   OPTIX_ROOT_DIR=/path/to/NVIDIA-OptiX-SDK-X.x.x-linux64-x86_64
+#     Enables WITH_CYCLES_DEVICE_OPTIX. Requires CUDA Toolkit (nvcc)
+#     installed (sudo dnf install cuda-toolkit on Fedora).
+#   WITH_CUDA=1
+#     Enables WITH_CYCLES_DEVICE_CUDA in addition. Mostly redundant
+#     with OptiX on RTX cards; useful as a fallback for non-RT GPUs.
 #
 # Usage:
-#   tools/build_cycles_libs.sh           # configure if needed, then build
-#   tools/build_cycles_libs.sh --reconfigure   # force re-run of CMake
+#   tools/build_cycles_libs.sh                  # CPU only (default)
+#   OPTIX_ROOT_DIR=~/optix tools/build_cycles_libs.sh   # CPU + OptiX
+#   tools/build_cycles_libs.sh --reconfigure    # force re-run of CMake
 # =====================================================================
 
 set -euo pipefail
+
+# Bring CUDA into PATH for nvcc discovery (Fedora 43 + cuda-toolkit RPM
+# installs into /usr/local/cuda/bin which isn't in $PATH by default).
+if [[ -d /usr/local/cuda/bin ]] && [[ ":$PATH:" != *":/usr/local/cuda/bin:"* ]]; then
+    export PATH="/usr/local/cuda/bin:$PATH"
+fi
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BLENDER_SRC="${ROOT}/extern/blender"
@@ -47,6 +60,75 @@ fi
 if [[ "${1:-}" == "--reconfigure" ]] || [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
     echo ">>> Configuring Cycles build at ${BUILD_DIR}"
     rm -rf "${BUILD_DIR}"
+
+    # GPU toggles. OptiX requires CUDA Toolkit too (nvcc compiles the
+    # device kernels). WITH_CUDA_DYNLOAD lets the runtime dlopen
+    # libcuda so we don't link against /usr/local/cuda/lib64 directly.
+    #
+    # CUDA_HOST_COMPILER: nvcc needs a host C++ compiler whose <cmath>
+    # / glibc headers it can parse. CUDA 13.1 chokes on gcc-15's glibc
+    # noexcept on rsqrt; explicitly point at gcc-14 if available.
+    GPU_ARGS=()
+    NVCC_HOST=""
+    if [[ -x /usr/bin/gcc-14 ]]; then
+        NVCC_HOST=/usr/bin/gcc-14
+    fi
+
+    if [[ -n "${OPTIX_ROOT_DIR:-}" ]]; then
+        if [[ ! -f "${OPTIX_ROOT_DIR}/include/optix.h" ]]; then
+            echo "Error: OPTIX_ROOT_DIR=${OPTIX_ROOT_DIR} doesn't contain include/optix.h" >&2
+            exit 1
+        fi
+        if ! command -v nvcc &>/dev/null; then
+            echo "Error: nvcc not in PATH. OptiX needs CUDA Toolkit (sudo dnf install cuda-toolkit)." >&2
+            exit 1
+        fi
+        echo ">>> GPU enabled: OptiX from ${OPTIX_ROOT_DIR}, nvcc from $(command -v nvcc)"
+        [[ -n "${NVCC_HOST}" ]] && echo ">>> nvcc host compiler: ${NVCC_HOST}"
+        GPU_ARGS=(
+            -DWITH_CYCLES_DEVICE_OPTIX=ON
+            -DOPTIX_ROOT_DIR="${OPTIX_ROOT_DIR}"
+            -DWITH_CYCLES_DEVICE_CUDA=ON           # OptiX shares CUDA kernel infra
+            -DWITH_CYCLES_CUDA_BINARIES=ON
+            -DWITH_CUDA_DYNLOAD=ON
+            # glibc 2.42 declares rsqrt under __USE_GNU with noexcept;
+            # CUDA 13.1's crt/math_functions.h declares it without —
+            # the redeclaration crashes nvcc. Undef _GNU_SOURCE on the
+            # host preprocessor for kernel TUs to skip glibc's rsqrt.
+            "-DCUDA_NVCC_FLAGS=-Xcompiler;-U_GNU_SOURCE"
+            # CUDA 13.1's IR validator chokes on some Cycles SVM
+            # kernels (svm_node_tex_voxel) for sm_86/89. Build only
+            # sm_75 + compute_75 PTX — the CUDA driver JIT-compiles
+            # PTX 7.5 to any sm >= 7.5 at runtime, which covers all
+            # RTX cards (sm_86/89/120 etc).
+            "-DCYCLES_CUDA_BINARIES_ARCH=sm_75;compute_75"
+        )
+        [[ -n "${NVCC_HOST}" ]] && GPU_ARGS+=(-DCUDA_HOST_COMPILER="${NVCC_HOST}")
+    elif [[ "${WITH_CUDA:-0}" == "1" ]]; then
+        if ! command -v nvcc &>/dev/null; then
+            echo "Error: nvcc not in PATH. CUDA needs the toolkit installed." >&2
+            exit 1
+        fi
+        echo ">>> GPU enabled: CUDA only (no OptiX), nvcc from $(command -v nvcc)"
+        [[ -n "${NVCC_HOST}" ]] && echo ">>> nvcc host compiler: ${NVCC_HOST}"
+        GPU_ARGS=(
+            -DWITH_CYCLES_DEVICE_CUDA=ON
+            -DWITH_CYCLES_DEVICE_OPTIX=OFF
+            -DWITH_CYCLES_CUDA_BINARIES=ON
+            -DWITH_CUDA_DYNLOAD=ON
+            "-DCUDA_NVCC_FLAGS=-Xcompiler;-U_GNU_SOURCE"
+            "-DCYCLES_CUDA_BINARIES_ARCH=sm_75;compute_75"
+        )
+        [[ -n "${NVCC_HOST}" ]] && GPU_ARGS+=(-DCUDA_HOST_COMPILER="${NVCC_HOST}")
+    else
+        echo ">>> CPU only (set OPTIX_ROOT_DIR or WITH_CUDA=1 to enable GPU)"
+        GPU_ARGS=(
+            -DWITH_CYCLES_DEVICE_CUDA=OFF
+            -DWITH_CYCLES_DEVICE_OPTIX=OFF
+            -DWITH_CYCLES_CUDA_BINARIES=OFF
+        )
+    fi
+
     cmake -S "${BLENDER_SRC}" -B "${BUILD_DIR}" -G "${GENERATOR}" \
         -DCMAKE_BUILD_TYPE=Release \
         \
@@ -57,12 +139,11 @@ if [[ "${1:-}" == "--reconfigure" ]] || [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]
         -DWITH_CYCLES_HYDRA_RENDER_DELEGATE=OFF \
         -DWITH_CYCLES_TEST=OFF \
         \
-        -DWITH_CYCLES_DEVICE_CUDA=OFF \
-        -DWITH_CYCLES_DEVICE_OPTIX=OFF \
+        "${GPU_ARGS[@]}" \
         -DWITH_CYCLES_DEVICE_HIP=OFF \
         -DWITH_CYCLES_DEVICE_METAL=OFF \
         -DWITH_CYCLES_DEVICE_ONEAPI=OFF \
-        -DWITH_CYCLES_CUDA_BINARIES=OFF \
+        -DWITH_CYCLES_HIP_BINARIES=OFF \
         \
         -DWITH_CYCLES_EMBREE=ON \
         -DWITH_CYCLES_OSL=OFF \
@@ -118,9 +199,26 @@ if [[ "${1:-}" == "--reconfigure" ]] || [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]
 fi
 
 echo ">>> Building cycles target (-j ${JOBS})"
-cmake --build "${BUILD_DIR}" --target cycles -j "${JOBS}"
+# NVCC_APPEND_FLAGS is respected by every nvcc invocation (CUDA kernels,
+# OptiX PTX kernels) — the per-macro CUDA_NVCC_FLAGS in Cycles' CMake
+# doesn't reach the OptiX path otherwise. -U_GNU_SOURCE hides glibc
+# 2.42's noexcept rsqrt declaration so CUDA 13.1's headers don't clash.
+NVCC_APPEND_FLAGS="-Xcompiler -U_GNU_SOURCE" \
+    cmake --build "${BUILD_DIR}" --target cycles -j "${JOBS}"
+
+# Stage kernel binaries into ${BUILD_DIR}/bin/lib so the Cycles runtime
+# can find them via path_get("lib/kernel_*.ptx.zst"). cmake --install
+# does this for us; we skip its RPATH-rewriting side effect on the
+# (unused-by-us) standalone executable by only installing the kernels
+# we care about via direct copy.
+KERNEL_DIR="${BUILD_DIR}/intern/cycles/kernel"
+DEST_DIR="${BUILD_DIR}/bin/lib"
+if compgen -G "${KERNEL_DIR}/*.zst" >/dev/null; then
+    mkdir -p "${DEST_DIR}"
+    cp -u "${KERNEL_DIR}"/*.zst "${DEST_DIR}/" 2>/dev/null || true
+fi
 
 echo
-echo ">>> Done. Artifacts:"
-find "${BUILD_DIR}/intern/cycles" -name 'libcycles_*.a' 2>/dev/null \
-    | sort | head -20
+echo ">>> Done."
+echo "  Static libs: ${BUILD_DIR}/lib/"
+echo "  Kernels:     ${DEST_DIR}/ (set CYCLESC_KERNEL_PATH=${BUILD_DIR}/bin to use at runtime)"

@@ -25,6 +25,13 @@ if [[ ! -f "${OUR_BUILD}/libcyclesc.a" ]]; then
     exit 1
 fi
 
+# cycles_libs builds with WITH_CYCLES_DEVICE_CUDA/OPTIX drop an extra
+# libextern_cuew.a (CUDA dlopen stubs); we sniff and add it when present.
+GPU_LFLAGS=()
+if [[ -f "${CY_BUILD}/lib/libextern_cuew.a" ]]; then
+    GPU_LFLAGS+=("-L=${CY_BUILD}/lib/libextern_cuew.a")
+fi
+
 OUT="${ROOT}/examples/triangle/triangle"
 
 ldc2 \
@@ -49,6 +56,7 @@ ldc2 \
     "-L=${CY_BUILD}/lib/libbf_intern_sky.a" \
     "-L=${CY_BUILD}/lib/libextern_glog.a" \
     "-L=${CY_BUILD}/lib/libextern_gflags.a" \
+    "${GPU_LFLAGS[@]}" \
     -L=-Wl,--end-group \
     \
     "-L=${LIBDIR}/openimageio/lib/libOpenImageIO.so" \

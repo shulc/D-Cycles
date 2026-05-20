@@ -4,7 +4,7 @@ D bindings for [Cycles X](https://docs.blender.org/manual/en/latest/render/cycle
 
 Architecture matches the neighbour `D-OpenSubdiv`: a thin C shim (`csrc/cyclesc.h`) wraps Cycles' C++ API; D side binds via `extern (C)`.
 
-## Status — Phase 0c done (CPU)
+## Status — Phase 0c done (CPU + NVIDIA GPU)
 
 | Component | Status |
 |---|---|
@@ -15,7 +15,9 @@ Architecture matches the neighbour `D-OpenSubdiv`: a thin C shim (`csrc/cyclesc.
 | Cycles libs build (`tools/build_cycles_libs.sh`) — CPU + Embree | ✅ |
 | `WITH_CYCLES=ON` CMake links against real Cycles | ✅ |
 | Triangle smoke test renders red-on-grey via real path tracer | ✅ |
-| GPU backends (CUDA / OptiX / HIP / Metal) | ⏳ next |
+| NVIDIA CUDA backend (driver dynload via cuew) | ✅ |
+| NVIDIA OptiX backend (RT-cores on RTX) | ✅ |
+| AMD HIP / Apple Metal backends | ⏳ |
 | Full shader-graph API (Phase 2) | ⏳ |
 
 The stub library still exists so the D bindings and downstream code can link without dragging in Cycles when the renderer isn't needed.
@@ -66,10 +68,14 @@ cmake --build build --target cyclesc
 2. Build the Cycles static libs via Blender's CMake. We can't `add_subdirectory(extern/blender)` because Blender's top-level CMakeLists calls `project(Blender)` and assumes `CMAKE_SOURCE_DIR` is its own root. A helper script handles the chain:
 
    ```bash
+   # CPU only
    tools/build_cycles_libs.sh
+
+   # CPU + NVIDIA CUDA + OptiX (requires CUDA Toolkit + OptiX SDK)
+   OPTIX_ROOT_DIR=~/NVIDIA-OptiX-SDK-9.x.x-linux64-x86_64 tools/build_cycles_libs.sh
    ```
 
-   First run: ~15 min on a 16-core CPU. Produces `extern/blender/build_cycles/lib/libcycles_*.a`.
+   First CPU-only run: ~15 min on a 16-core CPU. GPU build adds ~5 min for kernel compilation. Produces `extern/blender/build_cycles/lib/libcycles_*.a` plus `bin/lib/kernel_*.{cubin,ptx}.zst`.
 
 3. Configure & build our shim:
 
@@ -82,11 +88,24 @@ cmake --build build --target cyclesc
 
    ```bash
    tools/build_triangle.sh
-   ./examples/triangle/triangle
+   # Pick device via env var: CPU / CUDA / OPTIX (default OPTIX)
+   CYCLESC_KERNEL_PATH=extern/blender/build_cycles/bin \
+       CYC_DEVICE=OPTIX ./examples/triangle/triangle
    open examples/triangle/triangle.png
    ```
 
-The first-iteration backend is CPU-only (with Embree for BVH). GPU backends are a follow-up task — see `doc/phase_0c_plan.md`.
+   `CYCLESC_KERNEL_PATH` tells our wrapper where Cycles can find the GPU kernel binaries (`<path>/lib/kernel_*.zst`); the build script stages them there automatically. Skip the env var for CPU-only runs.
+
+### GPU prerequisites (NVIDIA)
+
+| Component | Version | Source |
+|---|---|---|
+| NVIDIA driver | ≥ 590.x (matching CUDA 13.1) | `cuda-drivers-590` from NVIDIA's cuda-fedora42 repo |
+| CUDA Toolkit | 13.1 (matches `nvcc` and PTX version to driver) | `cuda-toolkit` from same repo |
+| Host C++ for nvcc | gcc-14 (gcc-15 conflicts with CUDA 13.1 headers) | `sudo dnf install gcc14 gcc14-c++` |
+| OptiX SDK | 9.x (header-only, ~150 MB) | https://developer.nvidia.com/designworks/optix/download |
+
+The build script auto-detects gcc-14 at `/usr/bin/gcc-14`, picks up `OPTIX_ROOT_DIR` env var, and works around the CUDA 13.1 / glibc 2.42 `rsqrt` noexcept conflict by passing `NVCC_APPEND_FLAGS="-Xcompiler -U_GNU_SOURCE"` to nvcc.
 
 ## Layout
 

@@ -93,6 +93,15 @@ if(WITH_CYCLES)
         bf_intern_libc_compat bf_intern_guardedalloc bf_intern_sky
         extern_glog extern_gflags
     )
+    # WITH_CYCLES_DEVICE_CUDA/OPTIX builds drop extern_cuew (CUDA dynload
+    # stubs) alongside. Detect it on disk so a CPU-only build doesn't
+    # require the lib to exist.
+    if(EXISTS "${CYCLES_BUILD_DIR}/lib/libextern_cuew.a")
+        list(APPEND _cycles_static_libs extern_cuew)
+        set(_d_cycles_have_gpu TRUE)
+    else()
+        set(_d_cycles_have_gpu FALSE)
+    endif()
     foreach(_lib IN LISTS _cycles_static_libs)
         if(NOT EXISTS "${CYCLES_BUILD_DIR}/lib/lib${_lib}.a")
             message(FATAL_ERROR
@@ -181,13 +190,18 @@ if(WITH_CYCLES)
                                             -fno-signaling-nans -fno-rounding-math)
 
     # Static lib link order matters; group resolves circular deps.
+    set(_d_cycles_group_libs
+        cycles_session cycles_scene cycles_kernel cycles_device
+        cycles_integrator cycles_bvh cycles_subd cycles_graph cycles_util
+        bf_intern_libc_compat bf_intern_guardedalloc bf_intern_sky
+        extern_glog extern_gflags
+    )
+    if(_d_cycles_have_gpu)
+        list(APPEND _d_cycles_group_libs extern_cuew)
+    endif()
+
     target_link_libraries(cyclesc PRIVATE
-        -Wl,--start-group
-            cycles_session cycles_scene cycles_kernel cycles_device
-            cycles_integrator cycles_bvh cycles_subd cycles_graph cycles_util
-            bf_intern_libc_compat bf_intern_guardedalloc bf_intern_sky
-            extern_glog extern_gflags
-        -Wl,--end-group
+        -Wl,--start-group ${_d_cycles_group_libs} -Wl,--end-group
         ${_OIIO} ${_OIIO_UTL}
         ${_OCIO}
         ${_EMBREE}

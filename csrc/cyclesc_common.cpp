@@ -7,6 +7,8 @@
 #include "util/log.h"
 #include "util/path.h"
 
+#include <cstdlib>
+
 namespace cyc_internal {
 
 void ensure_global_init()
@@ -14,7 +16,20 @@ void ensure_global_init()
     static std::once_flag once;
     std::call_once(once, [] {
         ccl::util_logging_init("cyclesc");
-        ccl::path_init();
+
+        /* Cycles uses path_get("lib/<kernel>.cubin.zst" / ".ptx.zst") to
+         * locate GPU kernel binaries at runtime. Without an explicit
+         * path, it falls back to the directory of the running
+         * executable + "lib/". For the D-Cycles smoke tests the
+         * binaries live next to the executable but the kernels live in
+         * extern/blender/build_cycles/intern/cycles/ — let the caller
+         * point us at that root via CYCLESC_KERNEL_PATH. */
+        const char *kp = std::getenv("CYCLESC_KERNEL_PATH");
+        if (kp && *kp) {
+            ccl::path_init(kp, kp);
+        } else {
+            ccl::path_init();
+        }
     });
 }
 
