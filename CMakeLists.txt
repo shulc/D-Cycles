@@ -102,9 +102,13 @@ if(WITH_CYCLES)
     set(_cycles_static_libs
         cycles_session cycles_scene cycles_kernel cycles_device
         cycles_integrator cycles_bvh cycles_subd cycles_graph cycles_util
-        bf_intern_libc_compat bf_intern_guardedalloc bf_intern_sky
+        bf_intern_guardedalloc bf_intern_sky
         extern_glog extern_gflags
     )
+    # bf_intern_libc_compat is a Linux-only glibc compat shim
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        list(APPEND _cycles_static_libs bf_intern_libc_compat)
+    endif()
     # WITH_CYCLES_DEVICE_CUDA/OPTIX builds drop extern_cuew (CUDA dynload
     # stubs) alongside. Detect it on disk so a CPU-only build doesn't
     # require the lib to exist.
@@ -159,7 +163,11 @@ if(WITH_CYCLES)
     d_cycles_pick_so(_ILMTHR   "openexr/lib/libIlmThread")
     d_cycles_pick_so(_IMATH    "imath/lib/libImath")
     d_cycles_pick_so(_OSD_CPU  "opensubdiv/lib/libosdCPU")
-    d_cycles_pick_so(_SYCL     "dpcpp/lib/libsycl")
+    # SYCL (Intel oneAPI dpcpp) is Linux/Windows x86_64 only — not shipped on macOS
+    set(_SYCL "")
+    if(EXISTS "${LIBDIR}/dpcpp/lib/libsycl${_SHARED_LIB_EXT}")
+        d_cycles_pick_so(_SYCL "dpcpp/lib/libsycl")
+    endif()
 
     # Static deps where Blender ships .a only.
     set(_PUGIXML "${LIBDIR}/pugixml/lib/libpugixml.a")
@@ -215,15 +223,29 @@ if(WITH_CYCLES)
     set(_d_cycles_group_libs
         cycles_session cycles_scene cycles_kernel cycles_device
         cycles_integrator cycles_bvh cycles_subd cycles_graph cycles_util
-        bf_intern_libc_compat bf_intern_guardedalloc bf_intern_sky
+        bf_intern_guardedalloc bf_intern_sky
         extern_glog extern_gflags
     )
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        list(APPEND _d_cycles_group_libs bf_intern_libc_compat)
+    endif()
     if(_d_cycles_have_gpu)
         list(APPEND _d_cycles_group_libs extern_cuew)
     endif()
 
+    # GNU ld needs --start-group/--end-group for static lib circular deps.
+    # Apple ld (lld64) resolves them in a single pass — passing the flag
+    # is a hard error there.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(_d_cycles_group_open  "-Wl,--start-group")
+        set(_d_cycles_group_close "-Wl,--end-group")
+    else()
+        set(_d_cycles_group_open  "")
+        set(_d_cycles_group_close "")
+    endif()
+
     target_link_libraries(cyclesc PRIVATE
-        -Wl,--start-group ${_d_cycles_group_libs} -Wl,--end-group
+        ${_d_cycles_group_open} ${_d_cycles_group_libs} ${_d_cycles_group_close}
         ${_OIIO} ${_OIIO_UTL}
         ${_OCIO}
         ${_EMBREE}
@@ -235,7 +257,7 @@ if(WITH_CYCLES)
         ${_TBB}
         ${_PNG} ${_JPEG} ${_TIFF} ${_OPENJPEG} ${_WEBP}
         ${_ZLIB} ${_ZSTD}
-        pthread m dl
+        pthread m ${CMAKE_DL_LIBS}
     )
 
     # Make the precompiled .so libs findable at runtime without

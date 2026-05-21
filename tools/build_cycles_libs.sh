@@ -41,19 +41,35 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BLENDER_SRC="${ROOT}/extern/blender"
 BUILD_DIR="${BLENDER_SRC}/build_cycles"
 GENERATOR=${CMAKE_GENERATOR:-Ninja}
-JOBS=${JOBS:-$(nproc)}
+
+# Detect platform for job count
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    JOBS=${JOBS:-$(sysctl -n hw.ncpu)}
+else
+    JOBS=${JOBS:-$(nproc)}
+fi
 
 if [[ ! -d "${BLENDER_SRC}/intern/cycles" ]]; then
     echo "Error: ${BLENDER_SRC}/intern/cycles missing. Run:" >&2
     echo "  git submodule update --init extern/blender" >&2
     exit 1
 fi
-if [[ ! -d "${BLENDER_SRC}/lib/linux_x64" ]]; then
-    echo "Error: precompiled deps missing at ${BLENDER_SRC}/lib/linux_x64." >&2
+
+# Detect platform-specific lib directory
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    LIBDIR="${BLENDER_SRC}/lib/macos_arm64"
+elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    LIBDIR="${BLENDER_SRC}/lib/windows_x64"
+else
+    LIBDIR="${BLENDER_SRC}/lib/linux_x64"
+fi
+
+if [[ ! -d "${LIBDIR}" ]]; then
+    echo "Error: precompiled deps missing at ${LIBDIR}." >&2
     echo "Run:" >&2
     echo "  cd ${BLENDER_SRC}" >&2
-    echo "  git config --local submodule.lib/linux_x64.update checkout" >&2
-    echo "  git submodule update --init --depth 1 lib/linux_x64" >&2
+    echo "  git config --local submodule.$(basename $LIBDIR).update checkout" >&2
+    echo "  git submodule update --init --depth 1 $(basename $LIBDIR)" >&2
     exit 1
 fi
 
