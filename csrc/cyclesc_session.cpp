@@ -4,6 +4,10 @@
 
 #include "cyclesc_internal.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <atomic>
+
 #include "device/device.h"
 #include "scene/background.h"
 #include "scene/integrator.h"
@@ -26,20 +30,82 @@ using namespace cyc_internal;
 CapturingOutputDriver::CapturingOutputDriver()  = default;
 CapturingOutputDriver::~CapturingOutputDriver() = default;
 
+/* Snapshot the "combined" pass of a full-frame tile into pixels_.
+ * Used by both write_render_tile (final) and update_render_tile
+ * (progressive). Returns true on success. */
+static bool capture_tile_combined(const ccl::OutputDriver::Tile &tile,
+                                  std::mutex &mutex,
+                                  std::vector<float> &pixels,
+                                  int &width,
+                                  int &height,
+                                  const char *origin)
+{
+    static std::atomic<int> trace_on{-1};
+    if (trace_on.load() == -1) {
+        trace_on.store(std::getenv("CYC_TILE_TRACE") != nullptr ? 1 : 0);
+    }
+    if (trace_on.load() == 1) {
+        std::fprintf(stderr,
+            "[cyc:tile] %s size=%dx%d full=%dx%d offset=%d,%d layer='%s'\n",
+            origin, tile.size.x, tile.size.y,
+            tile.full_size.x, tile.full_size.y,
+            tile.offset.x, tile.offset.y,
+            std::string(tile.layer).c_str());
+        std::fflush(stderr);
+    }
+
+    /* Mirror OIIOOutputDriver's behavior: only act on the full-frame
+     * tile, ignore intermediate sub-tiles. */
+    if (!(tile.size == tile.full_size)) return false;
+
+    std::lock_guard<std::mutex> lock(mutex);
+    width  = tile.size.x;
+    height = tile.size.y;
+    pixels.assign(static_cast<size_t>(width) * height * 4, 0.0f);
+    if (!tile.get_pass_pixels("combined", 4, pixels.data())) {
+        if (trace_on.load() == 1) {
+            std::fprintf(stderr, "[cyc:tile] %s get_pass_pixels('combined') FAILED\n", origin);
+            std::fflush(stderr);
+        }
+        pixels.clear();
+        width = height = 0;
+        return false;
+    }
+    if (trace_on.load() == 1) {
+        /* Fingerprint a CENTER STRIP of the image — that's where rendered
+         * geometry usually lives. First 4 KB hashes ~top 3 rows which are
+         * just background gray and stay identical regardless of camera. */
+        const size_t total_pix = static_cast<size_t>(width) * height;
+        const size_t center_start = (total_pix / 2 - 512) * 4;   /* 1024 RGBA pixels around center */
+        const size_t center_end   = std::min(center_start + 4096 / sizeof(float) * 4 * sizeof(float) / sizeof(float),
+                                              pixels.size());
+        unsigned long long h = 1469598103934665603ULL;
+        for (size_t i = center_start; i < center_end; ++i) {
+            const unsigned int u = *reinterpret_cast<const unsigned int *>(&pixels[i]);
+            h ^= (u & 0xff);        h *= 1099511628211ULL;
+            h ^= ((u >> 8) & 0xff); h *= 1099511628211ULL;
+            h ^= ((u >> 16) & 0xff); h *= 1099511628211ULL;
+            h ^= ((u >> 24) & 0xff); h *= 1099511628211ULL;
+        }
+        const size_t center_px = (total_pix / 2) * 4;
+        std::fprintf(stderr,
+            "[cyc:tile] %s captured %d bytes  hash=%016llx  center=(%.3f,%.3f,%.3f,%.3f)\n",
+            origin, width * height * 16, h,
+            pixels[center_px], pixels[center_px+1],
+            pixels[center_px+2], pixels[center_px+3]);
+        std::fflush(stderr);
+    }
+    return true;
+}
+
 void CapturingOutputDriver::write_render_tile(const Tile &tile)
 {
-    /* Mirror OIIOOutputDriver's behavior: only act on the full-frame
-     * tile, ignore intermediate progressive tiles. */
-    if (!(tile.size == tile.full_size)) return;
+    capture_tile_combined(tile, mutex_, pixels_, width_, height_, "write");
+}
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    width_  = tile.size.x;
-    height_ = tile.size.y;
-    pixels_.assign(static_cast<size_t>(width_) * height_ * 4, 0.0f);
-    if (!tile.get_pass_pixels("combined", 4, pixels_.data())) {
-        pixels_.clear();
-        width_ = height_ = 0;
-    }
+bool CapturingOutputDriver::update_render_tile(const Tile &tile)
+{
+    return capture_tile_combined(tile, mutex_, pixels_, width_, height_, "update");
 }
 
 bool CapturingOutputDriver::copy_pixels(float *out, int w, int h) const
@@ -92,7 +158,12 @@ cyc_status cyc_session_create(const cyc_session_params *params, cyc_session_t **
 
     ccl::SessionParams sp;
     sp.device      = devices[idx];
-    sp.headless    = true;
+    /* headless=true forces RenderScheduler::work_need_update_display
+     * to return false (render_scheduler.cpp:1027), which means
+     * PathTrace::update_display never invokes OutputDriver::update_render_tile.
+     * For interactive IPR we need progressive tiles to flow into the
+     * driver — leave headless OFF when interactive is requested. */
+    sp.headless    = (params->interactive == 0);
     sp.background  = (params->interactive == 0);
     sp.samples     = params->samples > 0 ? params->samples : 64;
     sp.threads     = params->threads;
@@ -199,15 +270,19 @@ cyc_status cyc_session_reset(cyc_session_t *h, int w, int height)
     wrap->buffer_params.full_width  = w;
     wrap->buffer_params.full_height = height;
 
-    /* Camera resolution must match buffer params. */
+    /* Camera resolution. set_full_width/height are socket setters and
+     * auto-tag dirty bits; the worker's update_scene picks them up under
+     * scene->mutex on its next iteration. Do NOT call scene->camera->
+     * update(scene) here — it would (1) run device_update from the main
+     * thread without holding scene->mutex (race with the worker), and
+     * (2) clear the dirty bits set by the caller's scene-mutex'd
+     * sync_blueprint, masking the camera matrix update so the device
+     * keeps rendering with the old camera.  Just push the sockets and
+     * let the worker's update_scene do the device upload. */
     ccl::Scene *scene = wrap->session->scene.get();
     if (scene->camera) {
         scene->camera->set_full_width(w);
         scene->camera->set_full_height(height);
-        scene->camera->compute_auto_viewplane();
-        scene->camera->need_flags_update = true;
-        scene->camera->need_device_update = true;
-        scene->camera->update(scene);
     }
 
     wrap->session->reset(wrap->session->params, wrap->buffer_params);

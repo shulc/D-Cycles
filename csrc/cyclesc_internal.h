@@ -55,7 +55,16 @@ class CapturingOutputDriver : public ccl::OutputDriver {
     CapturingOutputDriver();
     ~CapturingOutputDriver() override;
 
+    /* Final write — Cycles calls this when path tracing finishes or is
+     * cancelled (PathTrace::tile_buffer_write at path_trace.cpp:886). */
     void write_render_tile(const Tile &tile) override;
+
+    /* Progressive update — Cycles calls this on every display tick in
+     * interactive mode (PathTrace::update_display at path_trace.cpp:704).
+     * Without this override the default returns false → no progressive
+     * IPR display. Same body as write_render_tile; returns true to
+     * signal "yes I consumed the update". */
+    bool update_render_tile(const Tile &tile) override;
 
     /* Returns true and fills out_pixels (size width*height*4) if a tile was
      * captured. Top-down RGBA order (already flipped from Cycles' bottom-up). */
