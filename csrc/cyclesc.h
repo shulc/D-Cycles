@@ -149,6 +149,18 @@ cyc_status         cyc_session_display_bind_gl_pbo(cyc_session_t* session,
  * this after the first frame to detect a silent fallback. */
 int                cyc_session_display_cpu_path_used(cyc_session_t* session);
 
+/* Register GL-context switching hooks. Cycles' CUDA-GL queries
+ * (cuGLGetDevices on the first interop probe, cuGraphicsGLRegisterBuffer
+ * inside copy_to_display_interop) run on the render worker thread and
+ * need a GL context current on that thread. The host typically creates
+ * a shared SDL_GLContext on the main thread and uses these callbacks to
+ * SDL_GL_MakeCurrent it onto the worker. Pass NULL/NULL to clear. */
+cyc_status         cyc_session_display_set_interop_callbacks(
+                       cyc_session_t* session,
+                       void (*activate)(void* userdata),
+                       void (*deactivate)(void* userdata),
+                       void* userdata);
+
 /* ====================================================================
  * Scene — graph of objects, lights, camera, materials.
  *

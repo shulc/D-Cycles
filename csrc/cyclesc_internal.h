@@ -117,6 +117,21 @@ class CapturingDisplayDriver : public ccl::DisplayDriver {
      * directly into it — zero CPU↔GPU copy. */
     void set_gl_pbo(int64_t pbo_id, size_t size_bytes);
     ccl::GraphicsInteropDevice graphics_interop_get_device() override;
+    void graphics_interop_activate() override;
+    void graphics_interop_deactivate() override;
+
+    /* Host hook so Cycles' worker thread can make a shared GL context
+     * current before CUDA-GL queries (cuGLGetDevices) — without it,
+     * CUDADevice::should_use_graphics_interop returns false on a
+     * single-NVIDIA setup because the worker thread has no GL
+     * context current and `cuGLGetDevices` sees zero GL-capable
+     * CUDA devices. activate is also invoked from inside the
+     * graphics_interop_get_device override so the first probe lands
+     * with the context already current. */
+    using interop_callback_fn = void (*)(void *userdata);
+    void set_interop_callbacks(interop_callback_fn activate,
+                               interop_callback_fn deactivate,
+                               void *userdata);
 
     /* Host readback path (CPU fallback / Phase 1b). Copies the latest
      * captured frame as RGBA float into out (size w*h*4 floats), with
@@ -144,6 +159,11 @@ class CapturingDisplayDriver : public ccl::DisplayDriver {
     int64_t                 gl_pbo_id_     = 0;
     size_t                  gl_pbo_size_   = 0;
     bool                    interop_dirty_ = false;
+
+    /* Host-supplied GL-context switching hooks. See set_interop_callbacks. */
+    interop_callback_fn     activate_cb_     = nullptr;
+    interop_callback_fn     deactivate_cb_   = nullptr;
+    void                   *interop_userdata_ = nullptr;
 
     /* Set true when Cycles calls map_texture_buffer (the CPU/naive
      * path). Hosts that registered a GL PBO use this to detect a

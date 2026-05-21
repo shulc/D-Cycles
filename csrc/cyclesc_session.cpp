@@ -225,11 +225,20 @@ ccl::GraphicsInteropDevice CapturingDisplayDriver::graphics_interop_get_device()
     if (trace_on.load() == -1)
         trace_on.store(std::getenv("CYC_TILE_TRACE") != nullptr ? 1 : 0);
 
+    /* Cycles' CUDA backend will call cuGLGetDevices right after this
+     * returns. That query needs a GL context to be current on the
+     * calling thread (this worker thread!). Hook the host so it can
+     * SDL_GL_MakeCurrent a shared context here. */
+    if (activate_cb_) activate_cb_(interop_userdata_);
+
+    /* NB: Cycles invokes this from inside the update_begin/_end window
+     * of its first iteration (via should_use_graphics_interop). Our
+     * update_lock_ still owns mutex_ at this point — re-acquiring
+     * would deadlock the worker against itself. The interop fields
+     * (gl_pbo_id_, gl_pbo_size_) are set by the host before the worker
+     * starts (cyc_session_display_bind_gl_pbo called pre-start in
+     * bootLiveSession); plain reads are safe enough. */
     ccl::GraphicsInteropDevice dev;
-    /* Only declare interop support when the host has actually
-     * registered a GL PBO.  Without one, Cycles falls back to the
-     * map/unmap CPU path which copy_pixels() reads from. */
-    std::lock_guard<std::mutex> lock(mutex_);
     if (gl_pbo_id_ != 0) {
         dev.type = ccl::GraphicsInteropDevice::OPENGL;
     }
@@ -240,6 +249,27 @@ ccl::GraphicsInteropDevice CapturingDisplayDriver::graphics_interop_get_device()
         std::fflush(stderr);
     }
     return dev;
+}
+
+void CapturingDisplayDriver::graphics_interop_activate()
+{
+    if (activate_cb_) activate_cb_(interop_userdata_);
+}
+
+void CapturingDisplayDriver::graphics_interop_deactivate()
+{
+    if (deactivate_cb_) deactivate_cb_(interop_userdata_);
+}
+
+void CapturingDisplayDriver::set_interop_callbacks(
+    interop_callback_fn activate,
+    interop_callback_fn deactivate,
+    void *userdata)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    activate_cb_      = activate;
+    deactivate_cb_    = deactivate;
+    interop_userdata_ = userdata;
 }
 
 bool CapturingDisplayDriver::copy_pixels(float *out, int w, int h) const
@@ -638,4 +668,23 @@ int cyc_session_display_cpu_path_used(cyc_session_t *h)
     auto *wrap = to_session(h);
     if (!wrap->display) return 0;
     return wrap->display->cpu_path_used() ? 1 : 0;
+}
+
+/* Register GL-context switching callbacks. Cycles' interop queries
+ * (cuGLGetDevices, cuGraphicsGLRegisterBuffer) need a GL context
+ * current on the calling worker thread. Host typically creates a
+ * shared SDL_GLContext and uses these callbacks to SDL_GL_MakeCurrent
+ * it on whichever thread Cycles invokes the driver from. */
+extern "C"
+cyc_status cyc_session_display_set_interop_callbacks(
+    cyc_session_t *h,
+    void (*activate)(void *userdata),
+    void (*deactivate)(void *userdata),
+    void *userdata)
+{
+    if (!h) return CYC_ERR_INVALID_ARGUMENT;
+    auto *wrap = to_session(h);
+    if (!wrap->display) return CYC_ERR_INTERNAL;
+    wrap->display->set_interop_callbacks(activate, deactivate, userdata);
+    return CYC_OK;
 }

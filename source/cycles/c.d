@@ -116,6 +116,13 @@ cyc_status cyc_session_display_bind_gl_pbo(cyc_session_t* session,
                                            ulong size_bytes);
 int        cyc_session_display_cpu_path_used(cyc_session_t* session);
 
+alias cyc_interop_cb_t = extern (C) void function(void* userdata);
+cyc_status cyc_session_display_set_interop_callbacks(
+              cyc_session_t* session,
+              cyc_interop_cb_t activate,
+              cyc_interop_cb_t deactivate,
+              void* userdata);
+
 // =====================================================================
 // Scene
 // =====================================================================
