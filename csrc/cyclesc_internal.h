@@ -144,6 +144,16 @@ class CapturingDisplayDriver : public ccl::DisplayDriver {
     int64_t                 gl_pbo_id_     = 0;
     size_t                  gl_pbo_size_   = 0;
     bool                    interop_dirty_ = false;
+
+    /* Set true when Cycles calls map_texture_buffer (the CPU/naive
+     * path). Hosts that registered a GL PBO use this to detect a
+     * silent interop fallback (e.g. CUDA-GL context activation didn't
+     * succeed): if cpu_path_used_ flips to true, the host should
+     * abandon zero-copy and read from copy_pixels instead. */
+    std::atomic<bool>       cpu_path_used_{false};
+
+ public:
+    bool cpu_path_used() const { return cpu_path_used_.load(); }
 };
 
 /* Bundled (Light + Object) handle. Lights in Cycles are a Geometry node

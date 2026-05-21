@@ -127,10 +127,22 @@ void CapturingDisplayDriver::next_tile_begin()
      * we accumulate into one buffer and the host reads the latest. */
 }
 
-bool CapturingDisplayDriver::update_begin(const Params & /*params*/, const int w, const int h)
+bool CapturingDisplayDriver::update_begin(const Params &params, const int w, const int h)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (w <= 0 || h <= 0) return false;
+
+    static std::atomic<int> trace_on{-1};
+    if (trace_on.load() == -1)
+        trace_on.store(std::getenv("CYC_TILE_TRACE") != nullptr ? 1 : 0);
+    if (trace_on.load() == 1) {
+        std::fprintf(stderr,
+            "[cyc:display] update_begin  tex=%dx%d  params.size=%dx%d full=%dx%d off=%d,%d\n",
+            w, h, params.size.x, params.size.y,
+            params.full_size.x, params.full_size.y,
+            params.full_offset.x, params.full_offset.y);
+        std::fflush(stderr);
+    }
 
     const size_t need = static_cast<size_t>(w) * static_cast<size_t>(h);
     if (buffer_.size() != need || width_ != w || height_ != h) {
@@ -160,6 +172,17 @@ void CapturingDisplayDriver::update_end()
 
 ccl::half4 *CapturingDisplayDriver::map_texture_buffer()
 {
+    /* Host-visible flag: this is the CPU/naive path — host using zero-
+     * copy interop must downgrade to copy_pixels readback. */
+    cpu_path_used_.store(true, std::memory_order_release);
+
+    static std::atomic<int> trace_on{-1};
+    if (trace_on.load() == -1)
+        trace_on.store(std::getenv("CYC_TILE_TRACE") != nullptr ? 1 : 0);
+    if (trace_on.load() == 1) {
+        std::fprintf(stderr, "[cyc:display] map_texture_buffer (CPU path)\n");
+        std::fflush(stderr);
+    }
     /* Note: this is invoked by Cycles inside the update_begin/_end
      * window — the mutex is NOT re-acquired here because Cycles
      * single-threads the map/unmap pair per device update.  If we
@@ -198,6 +221,10 @@ void CapturingDisplayDriver::set_gl_pbo(int64_t pbo_id, size_t size_bytes)
 
 ccl::GraphicsInteropDevice CapturingDisplayDriver::graphics_interop_get_device()
 {
+    static std::atomic<int> trace_on{-1};
+    if (trace_on.load() == -1)
+        trace_on.store(std::getenv("CYC_TILE_TRACE") != nullptr ? 1 : 0);
+
     ccl::GraphicsInteropDevice dev;
     /* Only declare interop support when the host has actually
      * registered a GL PBO.  Without one, Cycles falls back to the
@@ -205,6 +232,12 @@ ccl::GraphicsInteropDevice CapturingDisplayDriver::graphics_interop_get_device()
     std::lock_guard<std::mutex> lock(mutex_);
     if (gl_pbo_id_ != 0) {
         dev.type = ccl::GraphicsInteropDevice::OPENGL;
+    }
+    if (trace_on.load() == 1) {
+        std::fprintf(stderr,
+            "[cyc:display] graphics_interop_get_device → type=%d  pbo=%lld\n",
+            (int)dev.type, (long long)gl_pbo_id_);
+        std::fflush(stderr);
     }
     return dev;
 }
@@ -227,6 +260,28 @@ bool CapturingDisplayDriver::copy_pixels(float *out, int w, int h) const
             dst[x * 4 + 2] = f.z;
             dst[x * 4 + 3] = f.w;
         }
+    }
+
+    static std::atomic<int> trace_on{-1};
+    if (trace_on.load() == -1)
+        trace_on.store(std::getenv("CYC_TILE_TRACE") != nullptr ? 1 : 0);
+    if (trace_on.load() == 1) {
+        const size_t n = static_cast<size_t>(w) * h;
+        float mn = out[0], mx = out[0];
+        size_t mxIdx = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const float v = out[i * 4];   /* red channel */
+            if (v < mn) mn = v;
+            if (v > mx) { mx = v; mxIdx = i; }
+        }
+        const size_t mid = (n / 2) * 4;
+        std::fprintf(stderr,
+            "[cyc:display] copy_pixels  center=(%.3f,%.3f,%.3f) "
+            "min=%.3f max=%.3f@%zu  fv=%lu\n",
+            out[mid], out[mid+1], out[mid+2],
+            mn, mx, mxIdx,
+            (unsigned long)frame_version_.load());
+        std::fflush(stderr);
     }
     return true;
 }
@@ -288,6 +343,16 @@ cyc_status cyc_session_create(const cyc_session_params *params, cyc_session_t **
      * driver — leave headless OFF when interactive is requested. */
     sp.headless    = (params->interactive == 0);
     sp.background  = (params->interactive == 0);
+    /* Progressive resolution divider starts rendering at w/8 x h/8 and
+     * walks up to full res. Writes a small dense tile at the top of the
+     * display_rgba_half_ device buffer; after copy_from_device + the
+     * driver's copy_pixels_to_texture stride remapping, *most* of the
+     * output texture stays at its initial-zero state (visible as a
+     * mostly-black image with a tiny rendered patch in the corner).
+     * Until the host implements proper resolution-divider awareness
+     * (zoom-to-full-res over multiple frames), force divider OFF so
+     * Cycles renders at full resolution from sample 0. */
+    sp.use_resolution_divider = false;
     sp.samples     = params->samples > 0 ? params->samples : 64;
     sp.threads     = params->threads;
     sp.use_auto_tile = false;
@@ -393,10 +458,21 @@ cyc_status cyc_session_reset(cyc_session_t *h, int w, int height)
     wrap->width  = w;
     wrap->height = height;
     wrap->buffer_params = ccl::BufferParams();
-    wrap->buffer_params.width       = w;
-    wrap->buffer_params.height      = height;
-    wrap->buffer_params.full_width  = w;
-    wrap->buffer_params.full_height = height;
+    wrap->buffer_params.width         = w;
+    wrap->buffer_params.height        = height;
+    wrap->buffer_params.full_width    = w;
+    wrap->buffer_params.full_height   = height;
+    /* window_* defaults to 0; copy_to_display_naive uses
+     * effective_buffer_params_.window_width/height to compute the
+     * region copied to the display driver. Leaving those at zero can
+     * make Cycles' kernel render at full size but the display copy
+     * only push a 0×0 slice — texture stays mostly at its init-zero
+     * state (visible as a black cube on the initial 5% background).
+     * Explicitly mirror full_*. */
+    wrap->buffer_params.window_x      = 0;
+    wrap->buffer_params.window_y      = 0;
+    wrap->buffer_params.window_width  = w;
+    wrap->buffer_params.window_height = height;
 
     /* Camera resolution. set_full_width/height are socket setters and
      * auto-tag dirty bits; the worker's update_scene picks them up under
@@ -548,4 +624,18 @@ cyc_status cyc_session_display_bind_gl_pbo(cyc_session_t *h,
     wrap->display->set_gl_pbo(static_cast<int64_t>(gl_pbo_id),
                               static_cast<size_t>(size_bytes));
     return CYC_OK;
+}
+
+/* True after Cycles' worker has fallen back to the CPU naive path
+ * (map_texture_buffer) at least once since this session started.
+ * Hosts that opted in via cyc_session_display_bind_gl_pbo poll this
+ * after the first update_end — if true, zero-copy didn't take and
+ * they should read pixels via cyc_session_display_read_pixels instead. */
+extern "C"
+int cyc_session_display_cpu_path_used(cyc_session_t *h)
+{
+    if (!h) return 0;
+    auto *wrap = to_session(h);
+    if (!wrap->display) return 0;
+    return wrap->display->cpu_path_used() ? 1 : 0;
 }

@@ -144,6 +144,10 @@ unsigned long long cyc_session_display_version(cyc_session_t* session);
 cyc_status         cyc_session_display_bind_gl_pbo(cyc_session_t* session,
                                                    unsigned long long gl_pbo_id,
                                                    unsigned long long size_bytes);
+/* 1 once Cycles has taken the CPU/naive path (map_texture_buffer)
+ * since session start. Hosts that opted into zero-copy interop poll
+ * this after the first frame to detect a silent fallback. */
+int                cyc_session_display_cpu_path_used(cyc_session_t* session);
 
 /* ====================================================================
  * Scene — graph of objects, lights, camera, materials.

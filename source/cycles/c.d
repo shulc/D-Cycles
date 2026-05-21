@@ -114,6 +114,7 @@ ulong      cyc_session_display_version(cyc_session_t* session);
 cyc_status cyc_session_display_bind_gl_pbo(cyc_session_t* session,
                                            ulong gl_pbo_id,
                                            ulong size_bytes);
+int        cyc_session_display_cpu_path_used(cyc_session_t* session);
 
 // =====================================================================
 // Scene
