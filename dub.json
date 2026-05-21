@@ -47,6 +47,8 @@
         "$PACKAGE_DIR/extern/blender/build_cycles/lib/libextern_cuew.a",
         "--end-group",
 
+        "--exclude-libs=libextern_cuew.a",
+
         "$PACKAGE_DIR/extern/blender/lib/linux_x64/openimageio/lib/libOpenImageIO.so",
         "$PACKAGE_DIR/extern/blender/lib/linux_x64/openimageio/lib/libOpenImageIO_Util.so",
         "$PACKAGE_DIR/extern/blender/lib/linux_x64/opencolorio/lib/libOpenColorIO.so",

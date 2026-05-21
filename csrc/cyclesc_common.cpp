@@ -9,6 +9,22 @@
 
 #include <cstdlib>
 
+/* cuew (CUDA EWrapper) — wraps libcuda.so via dlopen + dlsym.
+ * Without an explicit `cuewInit(CUEW_INIT_CUDA)` the function pointers
+ * stay NULL. OIDN's CUDA device probe (triggered during
+ * Device::available_devices via oidnIsCUDADeviceSupported, which
+ * dlopen's libOpenImageDenoise_device_cuda.so and calls cuInit) lands
+ * on the null pointer and segfaults.
+ *
+ * LDC2-linked binaries usually avoid the crash because OIDN's runtime
+ * dependency resolution happens to find libcuda.so's real cuInit
+ * before the cuew null wrapper — masking the bug. DMD-linked binaries
+ * hit the null wrapper first and crash. Pre-initialising cuew here
+ * is the compiler-independent fix. */
+extern "C" {
+#include "cuew.h"
+}
+
 namespace cyc_internal {
 
 void ensure_global_init()
@@ -30,6 +46,17 @@ void ensure_global_init()
         } else {
             ccl::path_init();
         }
+
+        /* Load libcuda.so + libnvrtc.so via cuew so the function
+         * pointers cuInit/cuCtxCreate/... resolve to the real driver
+         * symbols. Non-zero return is non-fatal — Cycles falls back
+         * to other devices if CUDA isn't usable. The companion fix
+         * (linker flag --exclude-libs=libextern_cuew.a in dub.json)
+         * keeps cuew's globals from being dynamically exported, so
+         * OIDN's dlopen'd CUDA module finds libcuda.so's real cuInit
+         * instead of cuew's NULL-initialised function-pointer
+         * variable. */
+        (void) cuewInit(CUEW_INIT_CUDA | CUEW_INIT_NVRTC);
     });
 }
 

@@ -160,6 +160,7 @@ if(WITH_CYCLES)
         "${BLENDER_SRC}/intern/guardedalloc"
         "${BLENDER_SRC}/extern/glog/include"
         "${BLENDER_SRC}/extern/gflags/src"
+        "${BLENDER_SRC}/extern/cuew/include"
         "${LIBDIR}/openimageio/include"
         "${LIBDIR}/openexr/include"
         "${LIBDIR}/openexr/include/OpenEXR"
