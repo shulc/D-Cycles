@@ -215,6 +215,9 @@ if(WITH_CYCLES)
         WITH_CYCLES_LOGGING
         "CYCLES_GFLAGS_NAMESPACE="
     )
+    if(_d_cycles_have_gpu)
+        target_compile_definitions(cyclesc PRIVATE WITH_CYCLES_CUEW)
+    endif()
     target_compile_options(cyclesc PRIVATE -fno-trapping-math -fno-math-errno
                                             -fno-signed-zeros -ffp-contract=fast
                                             -fno-signaling-nans -fno-rounding-math)

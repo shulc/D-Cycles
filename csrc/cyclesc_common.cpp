@@ -21,9 +21,11 @@
  * before the cuew null wrapper — masking the bug. DMD-linked binaries
  * hit the null wrapper first and crash. Pre-initialising cuew here
  * is the compiler-independent fix. */
+#ifdef WITH_CYCLES_CUEW
 extern "C" {
 #include "cuew.h"
 }
+#endif
 
 namespace cyc_internal {
 
@@ -47,6 +49,7 @@ void ensure_global_init()
             ccl::path_init();
         }
 
+#ifdef WITH_CYCLES_CUEW
         /* Load libcuda.so + libnvrtc.so via cuew so the function
          * pointers cuInit/cuCtxCreate/... resolve to the real driver
          * symbols. Non-zero return is non-fatal — Cycles falls back
@@ -57,6 +60,7 @@ void ensure_global_init()
          * instead of cuew's NULL-initialised function-pointer
          * variable. */
         (void) cuewInit(CUEW_INIT_CUDA | CUEW_INIT_NVRTC);
+#endif
     });
 }
 

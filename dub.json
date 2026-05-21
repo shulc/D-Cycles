@@ -36,7 +36,7 @@
         "cd /d \"%PACKAGE_DIR%\\build\" && cmd /c \"cmake --build . -j --target cyclesc\""
     ],
 
-    "lflags-posix": [
+    "lflags-linux": [
         "-L$PACKAGE_DIR/build",
         "-L$PACKAGE_DIR/extern/blender/build_cycles/lib",
 
@@ -95,7 +95,62 @@
         "$PACKAGE_DIR/extern/blender/lib/linux_x64/zstd/lib/libzstd.a"
     ],
 
-    "libs-posix":   ["stdc++", "pthread", "m", "dl"],
-    "libs-osx":     ["c++", "pthread", "m", "dl"],
+    "lflags-osx": [
+        "-L$PACKAGE_DIR/build",
+        "-L$PACKAGE_DIR/extern/blender/build_cycles/lib",
+
+        "-rpath", "$PACKAGE_DIR/extern/blender/lib/macos_arm64/openimageio/lib",
+        "-rpath", "$PACKAGE_DIR/extern/blender/lib/macos_arm64/opencolorio/lib",
+        "-rpath", "$PACKAGE_DIR/extern/blender/lib/macos_arm64/embree/lib",
+        "-rpath", "$PACKAGE_DIR/extern/blender/lib/macos_arm64/openimagedenoise/lib",
+        "-rpath", "$PACKAGE_DIR/extern/blender/lib/macos_arm64/openexr/lib",
+        "-rpath", "$PACKAGE_DIR/extern/blender/lib/macos_arm64/imath/lib",
+        "-rpath", "$PACKAGE_DIR/extern/blender/lib/macos_arm64/opensubdiv/lib",
+        "-rpath", "$PACKAGE_DIR/extern/blender/lib/macos_arm64/tbb/lib",
+
+        "$PACKAGE_DIR/build/libcyclesc.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_session.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_scene.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_kernel.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_device.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_integrator.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_bvh.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_subd.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_graph.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libcycles_util.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libbf_intern_guardedalloc.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libbf_intern_sky.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libextern_glog.a",
+        "$PACKAGE_DIR/extern/blender/build_cycles/lib/libextern_gflags.a",
+
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/openimageio/lib/libOpenImageIO.dylib",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/openimageio/lib/libOpenImageIO_Util.dylib",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/opencolorio/lib/libOpenColorIO.dylib",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/embree/lib/libembree4.dylib",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/openimagedenoise/lib/libOpenImageDenoise.dylib",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/openexr/lib/libOpenEXR.dylib",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/openexr/lib/libOpenEXRCore.dylib",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/openexr/lib/libIex.dylib",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/openexr/lib/libIlmThread.dylib",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/imath/lib/libImath.dylib",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/opensubdiv/lib/libosdCPU.dylib",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/tbb/lib/libtbb.dylib",
+
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/pugixml/lib/libpugixml.a",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/png/lib/libpng.a",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/jpeg/lib/libjpeg.a",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/tiff/lib/libtiff.a",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/openjpeg/lib/libopenjp2.a",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/webp/lib/libwebp.a",
+        "$PACKAGE_DIR/extern/blender/lib/macos_arm64/zstd/lib/libzstd.a",
+
+        "-framework", "Foundation",
+        "-framework", "IOKit",
+        "-framework", "Carbon",
+        "-framework", "Accelerate"
+    ],
+
+    "libs-linux":   ["stdc++", "pthread", "m", "dl", "z"],
+    "libs-osx":     ["c++", "pthread", "m", "z"],
     "libs-windows": ["cyclesc"]
 }
