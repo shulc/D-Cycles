@@ -259,3 +259,44 @@ cyc_status cyc_session_progress(cyc_session_t *h, float *out_progress)
         to_session(h)->session->progress.get_progress());
     return CYC_OK;
 }
+
+/* ---- Interactive-mode scene sync API (Blender's IPR pattern) -------- */
+
+/* Non-blocking attempt to acquire the scene mutex. Returns 1 if the
+ * caller now owns the mutex (must pair with cyc_session_scene_unlock),
+ * 0 if the worker thread is currently holding it.
+ *
+ * Entry point for the "mutex + reset + start" IPR pattern that
+ * avoids destroying and recreating the session on every scene change. */
+extern "C"
+int cyc_session_scene_try_lock(cyc_session_t *h)
+{
+    if (!h) return 0;
+    auto *wrap = to_session(h);
+    if (!wrap->session || !wrap->session->scene) return 0;
+    return wrap->session->scene->mutex.try_lock() ? 1 : 0;
+}
+
+extern "C"
+void cyc_session_scene_unlock(cyc_session_t *h)
+{
+    if (!h) return;
+    auto *wrap = to_session(h);
+    if (wrap->session && wrap->session->scene) {
+        wrap->session->scene->mutex.unlock();
+    }
+}
+
+extern "C"
+void cyc_session_set_pause(cyc_session_t *h, int paused)
+{
+    if (!h) return;
+    to_session(h)->session->set_pause(paused != 0);
+}
+
+extern "C"
+void cyc_session_set_samples(cyc_session_t *h, int samples)
+{
+    if (!h || samples <= 0) return;
+    to_session(h)->session->set_samples(samples);
+}

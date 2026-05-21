@@ -88,6 +88,15 @@ cyc_status   cyc_session_wait(cyc_session_t* session);
 cyc_status   cyc_session_progress(cyc_session_t* session, float* out_progress);
 cyc_status   cyc_session_reset(cyc_session_t* session, int width, int height);
 
+// Interactive-mode scene sync API. Wrap scene mutation in
+// try_lock/unlock pairs to safely modify scene while session worker
+// thread is running. After unlocking, call cyc_session_reset +
+// cyc_session_start to apply changes — no destroy+recreate needed.
+int          cyc_session_scene_try_lock(cyc_session_t* session);
+void         cyc_session_scene_unlock(cyc_session_t* session);
+void         cyc_session_set_pause(cyc_session_t* session, int paused);
+void         cyc_session_set_samples(cyc_session_t* session, int samples);
+
 // =====================================================================
 // Scene
 // =====================================================================
