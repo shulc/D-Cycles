@@ -33,8 +33,10 @@ cyc_status cyc_object_create(cyc_scene_t *scene_h, cyc_object_t **out_object)
 extern "C"
 cyc_status cyc_object_destroy(cyc_scene_t *scene_h, cyc_object_t *obj_h)
 {
-    (void)scene_h; (void)obj_h;
-    return CYC_OK;  /* see cyc_mesh_destroy rationale */
+    if (!scene_h || !obj_h) return CYC_ERR_INVALID_ARGUMENT;
+    /* Caller MUST hold scene->mutex (see cyc_mesh_destroy). */
+    to_scene(scene_h)->delete_node(to_object(obj_h));
+    return CYC_OK;
 }
 
 extern "C"

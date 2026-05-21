@@ -81,7 +81,14 @@ extern "C"
 cyc_status cyc_light_destroy(cyc_scene_t *scene_h, cyc_light_t *h)
 {
     if (!scene_h || !h) return CYC_ERR_INVALID_ARGUMENT;
-    delete to_light(h);  /* Light + Object remain owned by Scene */
+    /* Caller MUST hold scene->mutex (the IPR pattern does). Remove the
+     * Light + carrier Object from the scene first so they don't ghost
+     * in IPR after the host drops them, then free our wrapper. */
+    auto *bundle = to_light(h);
+    ccl::Scene *scene = to_scene(scene_h);
+    if (bundle->object) scene->delete_node(bundle->object);
+    if (bundle->light)  scene->delete_node(bundle->light);
+    delete bundle;
     return CYC_OK;
 }
 

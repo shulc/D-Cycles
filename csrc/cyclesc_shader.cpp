@@ -51,7 +51,9 @@ cyc_status cyc_shader_create(cyc_scene_t *scene_h, cyc_shader_t **out)
 extern "C"
 cyc_status cyc_shader_destroy(cyc_scene_t *scene_h, cyc_shader_t *h)
 {
-    (void)scene_h; (void)h;
+    if (!scene_h || !h) return CYC_ERR_INVALID_ARGUMENT;
+    /* Caller MUST hold scene->mutex (IPR pattern). */
+    to_scene(scene_h)->delete_node(to_shader(h));
     return CYC_OK;
 }
 

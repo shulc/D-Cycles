@@ -37,8 +37,10 @@
 #include "scene/shader_graph.h"
 #include "session/session.h"
 #include "session/output_driver.h"
+#include "session/display_driver.h"
 #include "session/buffers.h"
 #include "session/tile.h"
+#include "util/half.h"
 #include "util/transform.h"
 #include "util/types.h"
 
@@ -81,6 +83,69 @@ class CapturingOutputDriver : public ccl::OutputDriver {
     int height_ = 0;
 };
 
+/* Progressive-IPR display driver: receives half4 pixels from Cycles
+ * via update_begin / map_texture_buffer / update_end protocol, stores
+ * them in an internal buffer for the host to read. Optional: assign a
+ * GL pixel-buffer handle (Phase 2 IPR-opt 3) to enable zero-copy
+ * device-direct writes via Cycles' GraphicsInterop mechanism.
+ *
+ * Lifecycle:
+ *   - update_begin (worker) → ensure buffer sized, lock mutex
+ *   - map_texture_buffer (worker) → returns buffer.data()
+ *   - unmap_texture_buffer (worker) → no-op (writes already in buffer)
+ *   - update_end (worker) → bump frame_version, unlock
+ *   - copy_pixels (host main thread) → converts half4 → float RGBA
+ *
+ * frame_version is atomic so the host can poll without locking. */
+class CapturingDisplayDriver : public ccl::DisplayDriver {
+ public:
+    CapturingDisplayDriver();
+    ~CapturingDisplayDriver() override;
+
+    /* DisplayDriver — required overrides. */
+    void  next_tile_begin() override;
+    bool  update_begin(const Params &params, const int w, const int h) override;
+    void  update_end() override;
+    ccl::half4 *map_texture_buffer() override;
+    void  unmap_texture_buffer() override;
+    void  zero() override;
+    void  draw(const Params &params) override;
+
+    /* Phase 2 (GL interop). The host calls this once after creating a
+     * GL pixel-buffer object sized for half4 RGBA. Cycles' CUDA backend
+     * picks the buffer up via graphics_interop_buffer_ and writes
+     * directly into it — zero CPU↔GPU copy. */
+    void set_gl_pbo(int64_t pbo_id, size_t size_bytes);
+    ccl::GraphicsInteropDevice graphics_interop_get_device() override;
+
+    /* Host readback path (CPU fallback / Phase 1b). Copies the latest
+     * captured frame as RGBA float into out (size w*h*4 floats), with
+     * half→float conversion. Returns true if pixels matched (w,h) and
+     * non-empty; false if no frame captured yet OR resolution changed
+     * since the last update_end. */
+    bool copy_pixels(float *out, int w, int h) const;
+
+    /* Monotonic counter. Bumped on each update_end (worker thread)
+     * under the buffer mutex. Host polls to detect new frames. */
+    uint64_t frame_version() const { return frame_version_.load(); }
+
+    int captured_width()  const { return width_; }
+    int captured_height() const { return height_; }
+
+ private:
+    mutable std::mutex      mutex_;
+    std::vector<ccl::half4> buffer_;
+    int                     width_  = 0;
+    int                     height_ = 0;
+    std::atomic<uint64_t>   frame_version_{0};
+
+    /* Phase 2 GL-PBO state. Stored so the driver can republish via
+     * graphics_interop_buffer_.assign on Cycles' first interop query. */
+    int64_t                 gl_pbo_id_     = 0;
+    size_t                  gl_pbo_size_   = 0;
+    bool                    interop_dirty_ = false;
+};
+
 /* Bundled (Light + Object) handle. Lights in Cycles are a Geometry node
  * that must be wrapped in an Object to receive a transform. We expose
  * a single cyc_light_t to the D side and manage both internally. */
@@ -89,10 +154,12 @@ struct LightBundle {
     ccl::Object *object;
 };
 
-/* Session wrapper. Owns a ccl::Session and an output capture driver. */
+/* Session wrapper. Owns a ccl::Session and the two capture drivers
+ * (Output for final/write-image; Display for progressive IPR). */
 struct SessionWrapper {
     std::unique_ptr<ccl::Session>     session;
     CapturingOutputDriver            *capture = nullptr;   /* borrowed from session */
+    CapturingDisplayDriver           *display = nullptr;   /* borrowed from session */
     ccl::BufferParams                 buffer_params;
     int                               width  = 0;
     int                               height = 0;

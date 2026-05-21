@@ -108,6 +108,129 @@ bool CapturingOutputDriver::update_render_tile(const Tile &tile)
     return capture_tile_combined(tile, mutex_, pixels_, width_, height_, "update");
 }
 
+/* ----------------------------------------------------------------- */
+/* CapturingDisplayDriver — progressive IPR via DisplayDriver protocol.
+ *
+ * Cycles' interactive loop calls update_begin → map_texture_buffer →
+ * (fill) → unmap_texture_buffer → update_end on every progressive
+ * iteration.  We retain the half4 buffer for the host to read via
+ * copy_pixels() (CPU path) or via a GL PBO assigned by set_gl_pbo()
+ * (interop path).                                                    */
+/* ----------------------------------------------------------------- */
+
+CapturingDisplayDriver::CapturingDisplayDriver()  = default;
+CapturingDisplayDriver::~CapturingDisplayDriver() = default;
+
+void CapturingDisplayDriver::next_tile_begin()
+{
+    /* Informational — Cycles signals start of a new tile.  No-op:
+     * we accumulate into one buffer and the host reads the latest. */
+}
+
+bool CapturingDisplayDriver::update_begin(const Params & /*params*/, const int w, const int h)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (w <= 0 || h <= 0) return false;
+
+    const size_t need = static_cast<size_t>(w) * static_cast<size_t>(h);
+    if (buffer_.size() != need || width_ != w || height_ != h) {
+        buffer_.assign(need, ccl::half4{ccl::half(0), ccl::half(0), ccl::half(0), ccl::half(0)});
+        width_  = w;
+        height_ = h;
+    }
+
+    /* Phase 2: if the host has registered a GL PBO since last call,
+     * republish it through graphics_interop_buffer_ so Cycles' device
+     * backend picks it up on the next iteration. */
+    if (interop_dirty_) {
+        graphics_interop_buffer_.assign(
+            ccl::GraphicsInteropDevice::OPENGL, gl_pbo_id_, gl_pbo_size_);
+        interop_dirty_ = false;
+    }
+    return true;
+}
+
+void CapturingDisplayDriver::update_end()
+{
+    /* Increment the visible-frame counter so the host can poll it
+     * without locking.  Memory order: release pairs with host's
+     * acquire on frame_version_.load(). */
+    frame_version_.fetch_add(1, std::memory_order_release);
+}
+
+ccl::half4 *CapturingDisplayDriver::map_texture_buffer()
+{
+    /* Note: this is invoked by Cycles inside the update_begin/_end
+     * window — the mutex is NOT re-acquired here because Cycles
+     * single-threads the map/unmap pair per device update.  If we
+     * wanted multi-device support we'd need a different scheme. */
+    if (buffer_.empty()) return nullptr;
+    return buffer_.data();
+}
+
+void CapturingDisplayDriver::unmap_texture_buffer()
+{
+    /* No-op — Cycles wrote directly into buffer_. */
+}
+
+void CapturingDisplayDriver::zero()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto &p : buffer_) {
+        p.x = ccl::half(0); p.y = ccl::half(0);
+        p.z = ccl::half(0); p.w = ccl::half(0);
+    }
+}
+
+void CapturingDisplayDriver::draw(const Params & /*params*/)
+{
+    /* Host doesn't call ccl::Session::draw() — we read pixels via
+     * copy_pixels() instead.  No-op here. */
+}
+
+void CapturingDisplayDriver::set_gl_pbo(int64_t pbo_id, size_t size_bytes)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    gl_pbo_id_     = pbo_id;
+    gl_pbo_size_   = size_bytes;
+    interop_dirty_ = true;
+}
+
+ccl::GraphicsInteropDevice CapturingDisplayDriver::graphics_interop_get_device()
+{
+    ccl::GraphicsInteropDevice dev;
+    /* Only declare interop support when the host has actually
+     * registered a GL PBO.  Without one, Cycles falls back to the
+     * map/unmap CPU path which copy_pixels() reads from. */
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (gl_pbo_id_ != 0) {
+        dev.type = ccl::GraphicsInteropDevice::OPENGL;
+    }
+    return dev;
+}
+
+bool CapturingDisplayDriver::copy_pixels(float *out, int w, int h) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (buffer_.empty() || w != width_ || h != height_) return false;
+
+    /* Cycles writes pixels bottom-up; flip to top-down on copy so the
+     * host's glTexImage2D upload matches ImGui's expected orientation
+     * without a UV flip in the panel. Matches CapturingOutputDriver. */
+    for (int y = 0; y < h; ++y) {
+        const ccl::half4 *src = &buffer_[(h - 1 - y) * w];
+        float            *dst = &out[y * w * 4];
+        for (int x = 0; x < w; ++x) {
+            const ccl::float4 f = ccl::half4_to_float4_image(src[x]);
+            dst[x * 4 + 0] = f.x;
+            dst[x * 4 + 1] = f.y;
+            dst[x * 4 + 2] = f.z;
+            dst[x * 4 + 3] = f.w;
+        }
+    }
+    return true;
+}
+
 bool CapturingOutputDriver::copy_pixels(float *out, int w, int h) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -184,11 +307,16 @@ cyc_status cyc_session_create(const cyc_session_params *params, cyc_session_t **
         return CYC_ERR_INTERNAL;
     }
 
-    /* Install our capturing output driver. Cycles takes ownership; we
-     * remember a borrowed pointer so we can read pixels post-render. */
+    /* Install both capture drivers. Cycles takes ownership; we
+     * remember borrowed pointers so we can read pixels (for
+     * Output: post-render final; for Display: progressive IPR). */
     auto capture = std::make_unique<CapturingOutputDriver>();
     wrap->capture = capture.get();
     wrap->session->set_output_driver(std::move(capture));
+
+    auto display = std::make_unique<CapturingDisplayDriver>();
+    wrap->display = display.get();
+    wrap->session->set_display_driver(std::move(display));
 
     /* Default pass: a single COMBINED pass. Required for image output. */
     ccl::Scene *scene = wrap->session->scene.get();
@@ -383,4 +511,41 @@ int cyc_session_ready_to_reset(cyc_session_t *h)
     auto *wrap = to_session(h);
     if (!wrap->session) return 0;
     return wrap->session->ready_to_reset() ? 1 : 0;
+}
+
+/* ---- Display driver (progressive IPR) -------------------------------- */
+
+extern "C"
+cyc_status cyc_session_display_read_pixels(cyc_session_t *h,
+                                           float *out_rgba, int w, int height)
+{
+    if (!h || !out_rgba || w <= 0 || height <= 0)
+        return CYC_ERR_INVALID_ARGUMENT;
+    auto *wrap = to_session(h);
+    if (!wrap->display) return CYC_ERR_INTERNAL;
+    if (!wrap->display->copy_pixels(out_rgba, w, height))
+        return CYC_ERR_INTERNAL;   /* no frame yet, or size mismatch */
+    return CYC_OK;
+}
+
+extern "C"
+unsigned long long cyc_session_display_version(cyc_session_t *h)
+{
+    if (!h) return 0;
+    auto *wrap = to_session(h);
+    if (!wrap->display) return 0;
+    return wrap->display->frame_version();
+}
+
+extern "C"
+cyc_status cyc_session_display_bind_gl_pbo(cyc_session_t *h,
+                                           unsigned long long gl_pbo_id,
+                                           unsigned long long size_bytes)
+{
+    if (!h) return CYC_ERR_INVALID_ARGUMENT;
+    auto *wrap = to_session(h);
+    if (!wrap->display) return CYC_ERR_INTERNAL;
+    wrap->display->set_gl_pbo(static_cast<int64_t>(gl_pbo_id),
+                              static_cast<size_t>(size_bytes));
+    return CYC_OK;
 }

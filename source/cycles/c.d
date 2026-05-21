@@ -98,6 +98,23 @@ void         cyc_session_set_pause(cyc_session_t* session, int paused);
 void         cyc_session_set_samples(cyc_session_t* session, int samples);
 int          cyc_session_ready_to_reset(cyc_session_t* session);
 
+// Display driver — progressive IPR readback.
+//
+// CapturingDisplayDriver is installed at session create. Cycles writes
+// half4 RGBA pixels via DisplayDriver protocol; host polls
+// cyc_session_display_version (atomic uint64 counter, bumps on each
+// frame end) and reads pixels via cyc_session_display_read_pixels
+// (half→float on copy).
+// Optional GL-PBO interop: cyc_session_display_bind_gl_pbo registers
+// a host-owned PBO so Cycles writes directly to GPU.
+cyc_status cyc_session_display_read_pixels(cyc_session_t* session,
+                                           float* out_rgba,
+                                           int width, int height);
+ulong      cyc_session_display_version(cyc_session_t* session);
+cyc_status cyc_session_display_bind_gl_pbo(cyc_session_t* session,
+                                           ulong gl_pbo_id,
+                                           ulong size_bytes);
+
 // =====================================================================
 // Scene
 // =====================================================================

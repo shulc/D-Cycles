@@ -30,11 +30,11 @@ extern "C"
 cyc_status cyc_mesh_destroy(cyc_scene_t *scene_h, cyc_mesh_t *mesh_h)
 {
     if (!scene_h || !mesh_h) return CYC_ERR_INVALID_ARGUMENT;
-    /* Cycles doesn't expose granular Mesh deletion in a generic way
-     * that's safe before device_update. We treat destroy as a no-op
-     * during Phase 0c — sessions are short-lived anyway. */
-    (void)scene_h;
-    (void)mesh_h;
+    /* Caller MUST hold scene->mutex (the IPR pattern does — see
+     * cycles_backend.resetAccumulation). delete_node enqueues into the
+     * scene's deletion list; the worker's next update_scene pass clears
+     * the device-side allocation. */
+    to_scene(scene_h)->delete_node(to_mesh(mesh_h));
     return CYC_OK;
 }
 

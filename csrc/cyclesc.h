@@ -123,6 +123,29 @@ cyc_status cyc_session_reset(cyc_session_t* session, int width, int height);
 int  cyc_session_ready_to_reset(cyc_session_t* session);
 
 /* ====================================================================
+ * Display driver — progressive IPR readback.
+ *
+ * A DisplayDriver is installed automatically by cyc_session_create.
+ * Cycles writes half4 RGBA pixels into the driver's internal buffer
+ * on every progressive iteration; the host polls cyc_session_display_
+ * version() to detect new frames and calls cyc_session_display_read_
+ * pixels() to convert them to float RGBA32F.
+ *
+ * Optional: cyc_session_display_bind_gl_pbo() lets the host register a
+ * GL pixel-buffer object so Cycles' device backend writes directly
+ * into it (zero CPU↔GPU copy). The host blits the PBO into its
+ * texture via glTexSubImage2D.
+ * ==================================================================== */
+
+cyc_status         cyc_session_display_read_pixels(cyc_session_t* session,
+                                                   float* out_rgba,
+                                                   int width, int height);
+unsigned long long cyc_session_display_version(cyc_session_t* session);
+cyc_status         cyc_session_display_bind_gl_pbo(cyc_session_t* session,
+                                                   unsigned long long gl_pbo_id,
+                                                   unsigned long long size_bytes);
+
+/* ====================================================================
  * Scene — graph of objects, lights, camera, materials.
  *
  * Scene is owned by Session; create/destroy through cyc_session_*.
