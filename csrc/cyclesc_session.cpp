@@ -300,3 +300,12 @@ void cyc_session_set_samples(cyc_session_t *h, int samples)
     if (!h || samples <= 0) return;
     to_session(h)->session->set_samples(samples);
 }
+
+extern "C"
+int cyc_session_ready_to_reset(cyc_session_t *h)
+{
+    if (!h) return 0;
+    auto *wrap = to_session(h);
+    if (!wrap->session) return 0;
+    return wrap->session->ready_to_reset() ? 1 : 0;
+}

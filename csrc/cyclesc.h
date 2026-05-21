@@ -115,6 +115,13 @@ cyc_status cyc_session_progress(cyc_session_t* session, float* out_progress);
 /* Reset render state — call after scene mutations during interactive mode. */
 cyc_status cyc_session_reset(cyc_session_t* session, int width, int height);
 
+/* True if calling cyc_session_reset right now will not stall waiting for
+ * an in-flight device sample to finish. Cycles' interactive IPR loop
+ * uses this as a gate: when false, the host should keep accumulating
+ * the current camera/scene a beat longer (or set_pause+retry) instead
+ * of forcing a reset and burning a frame on the device wait. */
+int  cyc_session_ready_to_reset(cyc_session_t* session);
+
 /* ====================================================================
  * Scene — graph of objects, lights, camera, materials.
  *

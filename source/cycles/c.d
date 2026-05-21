@@ -96,6 +96,7 @@ int          cyc_session_scene_try_lock(cyc_session_t* session);
 void         cyc_session_scene_unlock(cyc_session_t* session);
 void         cyc_session_set_pause(cyc_session_t* session, int paused);
 void         cyc_session_set_samples(cyc_session_t* session, int samples);
+int          cyc_session_ready_to_reset(cyc_session_t* session);
 
 // =====================================================================
 // Scene
