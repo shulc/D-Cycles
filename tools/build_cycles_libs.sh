@@ -145,6 +145,14 @@ if [[ "${1:-}" == "--reconfigure" ]] || [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]
         )
     fi
 
+    # Metal: enabled by default on macOS, disable elsewhere.
+    if [[ "$OSTYPE" == "darwin"* ]] && [[ "${NO_METAL:-0}" != "1" ]]; then
+        echo ">>> Metal device enabled (macOS); set NO_METAL=1 to disable"
+        METAL_ARG="-DWITH_CYCLES_DEVICE_METAL=ON"
+    else
+        METAL_ARG="-DWITH_CYCLES_DEVICE_METAL=OFF"
+    fi
+
     cmake -S "${BLENDER_SRC}" -B "${BUILD_DIR}" -G "${GENERATOR}" \
         -DCMAKE_BUILD_TYPE=Release \
         \
@@ -156,8 +164,8 @@ if [[ "${1:-}" == "--reconfigure" ]] || [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]
         -DWITH_CYCLES_TEST=OFF \
         \
         "${GPU_ARGS[@]}" \
+        "${METAL_ARG}" \
         -DWITH_CYCLES_DEVICE_HIP=OFF \
-        -DWITH_CYCLES_DEVICE_METAL=OFF \
         -DWITH_CYCLES_DEVICE_ONEAPI=OFF \
         -DWITH_CYCLES_HIP_BINARIES=OFF \
         \

@@ -147,7 +147,11 @@
         "-framework", "Foundation",
         "-framework", "IOKit",
         "-framework", "Carbon",
-        "-framework", "Accelerate"
+        "-framework", "Accelerate",
+        "-framework", "Metal",
+        "-framework", "MetalKit",
+        "-framework", "MetalPerformanceShaders",
+        "-framework", "QuartzCore"
     ],
 
     "libs-linux":   ["stdc++", "pthread", "m", "dl", "z"],
