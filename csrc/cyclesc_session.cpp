@@ -528,6 +528,26 @@ cyc_status cyc_session_reset(cyc_session_t *h, int w, int height)
     if (scene->camera) {
         scene->camera->set_full_width(w);
         scene->camera->set_full_height(height);
+        /* Camera::compute_auto_viewplane reads full_width/full_height
+         * and rewrites the viewplane BoundBox2D so the screen→NDC
+         * transform matches the new aspect ratio. set_full_width/height
+         * alone don't trigger this — Camera::update() uses the existing
+         * viewplane (left over from the ctor's default 1024×512 → 2:1).
+         * Without this call, every subsequent session_reset that
+         * changes the raster aspect renders distorted (verified: cube
+         * stretches horizontally as you drag the IPR panel wider).
+         * The standalone cycles app does the same after width/height
+         * mutations; Blender + Hydra integrations compute viewplane
+         * themselves and push it via set_viewplane_*. */
+        scene->camera->compute_auto_viewplane();
+        /* Push the viewplane sockets explicitly too — compute_auto_
+         * viewplane modifies the viewplane field, but the *individual*
+         * socket setters (viewplane.left/right/top/bottom) are what
+         * actually mark the camera node dirty for device upload. */
+        scene->camera->set_viewplane_left(scene->camera->viewplane.left);
+        scene->camera->set_viewplane_right(scene->camera->viewplane.right);
+        scene->camera->set_viewplane_top(scene->camera->viewplane.top);
+        scene->camera->set_viewplane_bottom(scene->camera->viewplane.bottom);
     }
 
     wrap->session->reset(wrap->session->params, wrap->buffer_params);
