@@ -149,7 +149,16 @@ class CapturingDisplayDriver : public ccl::DisplayDriver {
 
  private:
     mutable std::mutex      mutex_;
-    std::vector<ccl::half4> buffer_;
+    /* Double buffer: Cycles writes into buffer_write_ between
+     * update_begin/update_end; on update_end we swap the two so
+     * buffer_display_ always holds the most-recent COMPLETE iteration
+     * the host can safely read. Without this, the host's copy_pixels
+     * could snapshot Cycles' write buffer mid-iteration (e.g. CPU
+     * device's TBB parallel_for on rapid orbit/zoom resets where
+     * Cycles bails mid-pass) and see "black stripes from middle of
+     * model" — pixels Cycles never got to in the current iteration. */
+    std::vector<ccl::half4> buffer_write_;
+    std::vector<ccl::half4> buffer_display_;
     int                     width_  = 0;
     int                     height_ = 0;
     std::atomic<uint64_t>   frame_version_{0};

@@ -132,6 +132,18 @@ bool CapturingDisplayDriver::update_begin(const Params &params, const int w, con
     std::lock_guard<std::mutex> lock(mutex_);
     if (w <= 0 || h <= 0) return false;
 
+    /* Resize both buffers if dims changed. write_ is what Cycles fills
+     * in this update; display_ is what host reads. Swap happens in
+     * update_end on a clean iteration. */
+    const size_t need = static_cast<size_t>(w) * static_cast<size_t>(h);
+    if (buffer_write_.size() != need || width_ != w || height_ != h) {
+        const ccl::half4 zero{ccl::half(0), ccl::half(0), ccl::half(0), ccl::half(0)};
+        buffer_write_.assign(need, zero);
+        buffer_display_.assign(need, zero);
+        width_  = w;
+        height_ = h;
+    }
+
     static std::atomic<int> trace_on{-1};
     if (trace_on.load() == -1)
         trace_on.store(std::getenv("CYC_TILE_TRACE") != nullptr ? 1 : 0);
@@ -142,13 +154,6 @@ bool CapturingDisplayDriver::update_begin(const Params &params, const int w, con
             params.full_size.x, params.full_size.y,
             params.full_offset.x, params.full_offset.y);
         std::fflush(stderr);
-    }
-
-    const size_t need = static_cast<size_t>(w) * static_cast<size_t>(h);
-    if (buffer_.size() != need || width_ != w || height_ != h) {
-        buffer_.assign(need, ccl::half4{ccl::half(0), ccl::half(0), ccl::half(0), ccl::half(0)});
-        width_  = w;
-        height_ = h;
     }
 
     /* Phase 2: if the host has registered a GL PBO since last call,
@@ -164,9 +169,15 @@ bool CapturingDisplayDriver::update_begin(const Params &params, const int w, con
 
 void CapturingDisplayDriver::update_end()
 {
-    /* Increment the visible-frame counter so the host can poll it
-     * without locking.  Memory order: release pairs with host's
-     * acquire on frame_version_.load(). */
+    /* Promote the just-written buffer to the host-readable slot. Cycles
+     * only calls update_end after a *complete* iteration (path_trace.cpp
+     * bails before update_display on cancel), so a swap here always
+     * publishes a coherent frame — never the middle of a TBB pass.
+     * Atomic version bump for lock-free host polling. */
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::swap(buffer_write_, buffer_display_);
+    }
     frame_version_.fetch_add(1, std::memory_order_release);
 }
 
@@ -183,26 +194,25 @@ ccl::half4 *CapturingDisplayDriver::map_texture_buffer()
         std::fprintf(stderr, "[cyc:display] map_texture_buffer (CPU path)\n");
         std::fflush(stderr);
     }
-    /* Note: this is invoked by Cycles inside the update_begin/_end
-     * window — the mutex is NOT re-acquired here because Cycles
-     * single-threads the map/unmap pair per device update.  If we
-     * wanted multi-device support we'd need a different scheme. */
-    if (buffer_.empty()) return nullptr;
-    return buffer_.data();
+    /* Cycles writes into buffer_write_; we swap it into buffer_display_
+     * in update_end. Mutex is NOT re-acquired here (we hold the lock
+     * across map/unmap by Cycles' single-thread contract). */
+    if (buffer_write_.empty()) return nullptr;
+    return buffer_write_.data();
 }
 
 void CapturingDisplayDriver::unmap_texture_buffer()
 {
-    /* No-op — Cycles wrote directly into buffer_. */
+    /* No-op — Cycles wrote directly into buffer_write_. The display
+     * swap happens in update_end. */
 }
 
 void CapturingDisplayDriver::zero()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (auto &p : buffer_) {
-        p.x = ccl::half(0); p.y = ccl::half(0);
-        p.z = ccl::half(0); p.w = ccl::half(0);
-    }
+    const ccl::half4 zero{ccl::half(0), ccl::half(0), ccl::half(0), ccl::half(0)};
+    std::fill(buffer_write_.begin(),   buffer_write_.end(),   zero);
+    std::fill(buffer_display_.begin(), buffer_display_.end(), zero);
 }
 
 void CapturingDisplayDriver::draw(const Params & /*params*/)
@@ -275,13 +285,14 @@ void CapturingDisplayDriver::set_interop_callbacks(
 bool CapturingDisplayDriver::copy_pixels(float *out, int w, int h) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (buffer_.empty() || w != width_ || h != height_) return false;
+    if (buffer_display_.empty() || w != width_ || h != height_) return false;
 
     /* Cycles writes pixels bottom-up; flip to top-down on copy so the
      * host's glTexImage2D upload matches ImGui's expected orientation
-     * without a UV flip in the panel. Matches CapturingOutputDriver. */
+     * without a UV flip in the panel. Read from buffer_display_ — the
+     * COMPLETE last-iteration snapshot, never mid-write content. */
     for (int y = 0; y < h; ++y) {
-        const ccl::half4 *src = &buffer_[(h - 1 - y) * w];
+        const ccl::half4 *src = &buffer_display_[(h - 1 - y) * w];
         float            *dst = &out[y * w * 4];
         for (int x = 0; x < w; ++x) {
             const ccl::float4 f = ccl::half4_to_float4_image(src[x]);
