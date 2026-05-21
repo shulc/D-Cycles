@@ -61,7 +61,19 @@ if(WITH_CYCLES)
         CACHE PATH "Path to Blender source tree (submodule)")
     set(CYCLES_BUILD_DIR "${BLENDER_SRC}/build_cycles"
         CACHE PATH "Where tools/build_cycles_libs.sh produced libcycles_*.a")
-    set(LIBDIR "${BLENDER_SRC}/lib/linux_x64"
+
+    # Detect platform-specific precompiled deps directory
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(_BLENDER_LIBDIR "lib/linux_x64")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        set(_BLENDER_LIBDIR "lib/macos_arm64")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        set(_BLENDER_LIBDIR "lib/windows_x64")
+    else()
+        message(FATAL_ERROR "Unsupported platform: ${CMAKE_SYSTEM_NAME}")
+    endif()
+
+    set(LIBDIR "${BLENDER_SRC}/${_BLENDER_LIBDIR}"
         CACHE PATH "Blender precompiled deps tree (lib/<platform>_<arch>)")
 
     if(NOT EXISTS "${BLENDER_SRC}/intern/cycles/CMakeLists.txt")
@@ -72,8 +84,8 @@ if(WITH_CYCLES)
     if(NOT EXISTS "${LIBDIR}/openimageio")
         message(FATAL_ERROR
             "Precompiled deps not found at ${LIBDIR}. Run:\n"
-            "  git -C extern/blender config --local submodule.lib/linux_x64.update checkout\n"
-            "  git -C extern/blender submodule update --init --depth 1 lib/linux_x64")
+            "  git -C extern/blender config --local submodule.${_BLENDER_LIBDIR}.update checkout\n"
+            "  git -C extern/blender submodule update --init --depth 1 ${_BLENDER_LIBDIR}")
     endif()
     if(NOT EXISTS "${CYCLES_BUILD_DIR}/lib/libcycles_session.a")
         message(FATAL_ERROR
@@ -113,32 +125,41 @@ if(WITH_CYCLES)
             IMPORTED_LOCATION "${CYCLES_BUILD_DIR}/lib/lib${_lib}.a")
     endforeach()
 
-    # ---- Third-party libs from extern/blender/lib/linux_x64 ----------
+    # ---- Third-party libs from extern/blender/${_BLENDER_LIBDIR} ------
     # We mirror what extern/blender/build_cycles/bin/cycles actually
-    # links to (verified via ldd). Shared libs are referenced by their
+    # links to (verified via ldd/otool). Shared libs are referenced by their
     # versioned soname so the runtime dynamic loader doesn't need a
-    # rebuild-the-symlinks dance — the unversioned .so symlinks point
-    # at the same files. Static libs (.a) are direct.
-    function(d_cycles_pick_so var path)
+    # rebuild-the-symlinks dance — the unversioned .so/.dylib/.dll symlinks
+    # point at the same files. Static libs (.a) are direct.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        set(_SHARED_LIB_EXT ".dylib")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        set(_SHARED_LIB_EXT ".dll")
+    else()
+        set(_SHARED_LIB_EXT ".so")
+    endif()
+
+    function(d_cycles_pick_so var lib_name)
+        set(path "${LIBDIR}/${lib_name}${_SHARED_LIB_EXT}")
         if(NOT EXISTS "${path}")
             message(FATAL_ERROR "shared library not found: ${path}")
         endif()
         set(${var} "${path}" PARENT_SCOPE)
     endfunction()
 
-    d_cycles_pick_so(_OIIO     "${LIBDIR}/openimageio/lib/libOpenImageIO.so")
-    d_cycles_pick_so(_OIIO_UTL "${LIBDIR}/openimageio/lib/libOpenImageIO_Util.so")
-    d_cycles_pick_so(_OCIO     "${LIBDIR}/opencolorio/lib/libOpenColorIO.so")
-    d_cycles_pick_so(_TBB      "${LIBDIR}/tbb/lib/libtbb.so")
-    d_cycles_pick_so(_EMBREE   "${LIBDIR}/embree/lib/libembree4.so")
-    d_cycles_pick_so(_OIDN     "${LIBDIR}/openimagedenoise/lib/libOpenImageDenoise.so")
-    d_cycles_pick_so(_OPENEXR  "${LIBDIR}/openexr/lib/libOpenEXR.so")
-    d_cycles_pick_so(_OEXRCORE "${LIBDIR}/openexr/lib/libOpenEXRCore.so")
-    d_cycles_pick_so(_IEX      "${LIBDIR}/openexr/lib/libIex.so")
-    d_cycles_pick_so(_ILMTHR   "${LIBDIR}/openexr/lib/libIlmThread.so")
-    d_cycles_pick_so(_IMATH    "${LIBDIR}/imath/lib/libImath.so")
-    d_cycles_pick_so(_OSD_CPU  "${LIBDIR}/opensubdiv/lib/libosdCPU.so")
-    d_cycles_pick_so(_SYCL     "${LIBDIR}/dpcpp/lib/libsycl.so")
+    d_cycles_pick_so(_OIIO     "openimageio/lib/libOpenImageIO")
+    d_cycles_pick_so(_OIIO_UTL "openimageio/lib/libOpenImageIO_Util")
+    d_cycles_pick_so(_OCIO     "opencolorio/lib/libOpenColorIO")
+    d_cycles_pick_so(_TBB      "tbb/lib/libtbb")
+    d_cycles_pick_so(_EMBREE   "embree/lib/libembree4")
+    d_cycles_pick_so(_OIDN     "openimagedenoise/lib/libOpenImageDenoise")
+    d_cycles_pick_so(_OPENEXR  "openexr/lib/libOpenEXR")
+    d_cycles_pick_so(_OEXRCORE "openexr/lib/libOpenEXRCore")
+    d_cycles_pick_so(_IEX      "openexr/lib/libIex")
+    d_cycles_pick_so(_ILMTHR   "openexr/lib/libIlmThread")
+    d_cycles_pick_so(_IMATH    "imath/lib/libImath")
+    d_cycles_pick_so(_OSD_CPU  "opensubdiv/lib/libosdCPU")
+    d_cycles_pick_so(_SYCL     "dpcpp/lib/libsycl")
 
     # Static deps where Blender ships .a only.
     set(_PUGIXML "${LIBDIR}/pugixml/lib/libpugixml.a")

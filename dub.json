@@ -9,9 +9,28 @@
     "sourcePaths": ["source"],
     "importPaths": ["source"],
 
-    "preBuildCommands-posix": [
+    "preBuildCommands-linux": [
+        "cd \"$PACKAGE_DIR\" && GIT_LFS_SKIP_SMUDGE=1 git submodule update --init extern/blender",
+        "cd \"$PACKAGE_DIR\" && git -C extern/blender config --local submodule.lib/linux_x64.update checkout",
+        "cd \"$PACKAGE_DIR\" && GIT_LFS_SKIP_SMUDGE=1 git -C extern/blender submodule update --init --depth 1 lib/linux_x64",
         "cd \"$PACKAGE_DIR\" && cmake -S \"$PACKAGE_DIR\" -B \"$PACKAGE_DIR/build\" -DCMAKE_BUILD_TYPE=Release -DWITH_CYCLES=ON",
         "cmake --build \"$PACKAGE_DIR/build\" -j --target cyclesc"
+    ],
+
+    "preBuildCommands-osx": [
+        "cd \"$PACKAGE_DIR\" && GIT_LFS_SKIP_SMUDGE=1 git submodule update --init extern/blender",
+        "cd \"$PACKAGE_DIR\" && git -C extern/blender config --local submodule.lib/macos_arm64.update checkout",
+        "cd \"$PACKAGE_DIR\" && GIT_LFS_SKIP_SMUDGE=1 git -C extern/blender submodule update --init --depth 1 lib/macos_arm64",
+        "cd \"$PACKAGE_DIR\" && cmake -S \"$PACKAGE_DIR\" -B \"$PACKAGE_DIR/build\" -DCMAKE_BUILD_TYPE=Release -DWITH_CYCLES=ON",
+        "cmake --build \"$PACKAGE_DIR/build\" -j --target cyclesc"
+    ],
+
+    "preBuildCommands-windows": [
+        "cd /d \"%PACKAGE_DIR%\" && cmd /c \"git submodule update --init extern/blender\"",
+        "cd /d \"%PACKAGE_DIR%\" && cmd /c \"git -C extern/blender config --local submodule.lib/windows_x64.update checkout\"",
+        "cd /d \"%PACKAGE_DIR%\" && cmd /c \"git -C extern/blender submodule update --init --depth 1 lib/windows_x64\"",
+        "cd /d \"%PACKAGE_DIR%\" && cmd /c \"cmake -S \\\"%PACKAGE_DIR%\\\" -B \\\"%PACKAGE_DIR%\\build\\\" -DCMAKE_BUILD_TYPE=Release -DWITH_CYCLES=ON\"",
+        "cd /d \"%PACKAGE_DIR%\\build\" && cmd /c \"cmake --build . -j --target cyclesc\""
     ],
 
     "lflags-posix": [
