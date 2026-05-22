@@ -246,19 +246,17 @@ if compgen -G "${KERNEL_DIR}/*.zst" >/dev/null; then
     cp -u "${KERNEL_DIR}"/*.zst "${DEST_DIR}/" 2>/dev/null || true
 fi
 
-# Verify Blender's delayed_install populated the source tree at
-# ${BUILD_DIR}/bin/source/kernel/device/metal/kernel.metal — that's
-# what Cycles' Metal device JIT-compiles via path_get("source/...").
-# Without this layout (e.g. an older Blender that skipped the install
-# step), Metal renders fail with "kernel.metal file not found".
-METAL_KERNEL="${BUILD_DIR}/bin/source/kernel/device/metal/kernel.metal"
-if [[ "$OSTYPE" == "darwin"* ]] && [[ "${WITH_METAL:-0}" == "1" ]]; then
-    if [[ ! -f "${METAL_KERNEL}" ]]; then
-        echo "WARNING: Metal was requested but ${METAL_KERNEL} is missing." >&2
-        echo "  Cycles JIT will fail at render time. Check that the build" >&2
-        echo "  populated bin/source/ — try --reconfigure." >&2
-    fi
-fi
+# Stage Cycles' source tree under ${BUILD_DIR}/bin/source so the Metal
+# device can find kernel.metal via path_get("source/kernel/device/metal/
+# kernel.metal"). delayed_install populates this only when cmake --install
+# runs, which we avoid (it rewrites RPATH on the unused standalone binary
+# and pollutes the dev tree). A symlink achieves the same path resolution
+# at zero cost. Always recreate so an old cmake-install copy or a stale
+# symlink target gets refreshed.
+mkdir -p "${BUILD_DIR}/bin"
+rm -rf "${BUILD_DIR}/bin/source"
+ln -sfn "${BLENDER_SRC}/intern/cycles" "${BUILD_DIR}/bin/source"
+echo ">>> Staged Cycles source tree: ${BUILD_DIR}/bin/source -> ${BLENDER_SRC}/intern/cycles"
 
 echo
 echo ">>> Done."
