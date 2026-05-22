@@ -441,12 +441,23 @@ cyc_status cyc_session_create(const cyc_session_params *params, cyc_session_t **
 
     /* 1. Background — Cycles' default_background graph is empty. Give
      *    it a faint neutral sky so a smoke test renders something
-     *    visible even without an explicit env light. */
+     *    visible even without an explicit env light.
+     *
+     *    CYC_BG_DEBUG=1: paint the background bright magenta at high
+     *    intensity. Diagnostic for "black render" cases — if pixels
+     *    aren't magenta, the kernel is dropping background contributions
+     *    too, not just surface shading. */
     {
+        const bool bg_debug = std::getenv("CYC_BG_DEBUG") != nullptr;
         auto bg_graph = std::make_unique<ccl::ShaderGraph>();
         auto *bg = bg_graph->create_node<ccl::BackgroundNode>();
-        bg->set_color(ccl::make_float3(0.05f, 0.05f, 0.05f));
-        bg->set_strength(1.0f);
+        if (bg_debug) {
+            bg->set_color(ccl::make_float3(1.0f, 0.0f, 1.0f));
+            bg->set_strength(5.0f);
+        } else {
+            bg->set_color(ccl::make_float3(0.05f, 0.05f, 0.05f));
+            bg->set_strength(1.0f);
+        }
         bg_graph->connect(bg->output("Background"),
                           bg_graph->output()->input("Surface"));
         scene->default_background->set_graph(std::move(bg_graph));
