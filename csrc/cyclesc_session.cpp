@@ -406,6 +406,7 @@ cyc_status cyc_session_create(const cyc_session_params *params, cyc_session_t **
 
     auto *wrap = new (std::nothrow) SessionWrapper();
     if (!wrap) return CYC_ERR_OUT_OF_MEMORY;
+    wrap->interactive = params->interactive;
     try {
         wrap->session = std::make_unique<ccl::Session>(sp, scene_params);
     } catch (const std::exception &) {
@@ -434,61 +435,15 @@ cyc_status cyc_session_create(const cyc_session_params *params, cyc_session_t **
         wrap->session->set_display_driver(std::move(display));
     }
 
-    /* Default pass: a single COMBINED pass. Required for image output. */
-    ccl::Scene *scene = wrap->session->scene.get();
-    ccl::Pass *pass = scene->create_node<ccl::Pass>();
-    pass->set_name(ccl::ustring("combined"));
-    pass->set_type(ccl::PASS_COMBINED);
-
-    /* Drop sample count on the integrator too — Cycles checks both. */
-    if (scene->integrator) {
-        scene->integrator->set_min_bounce(0);
-        scene->integrator->set_max_bounce(8);
-    }
-
-    /* Two scene-default tweaks. Both are non-destructive defaults the
-     * caller can override per-shader later. */
-
-    /* 1. Background — Cycles' default_background graph is empty. Give
-     *    it a faint neutral sky so a smoke test renders something
-     *    visible even without an explicit env light.
-     *
-     *    CYC_BG_DEBUG=1: paint the background bright magenta at high
-     *    intensity. Diagnostic for "black render" cases — if pixels
-     *    aren't magenta, the kernel is dropping background contributions
-     *    too, not just surface shading. */
-    {
-        const bool bg_debug = std::getenv("CYC_BG_DEBUG") != nullptr;
-        auto bg_graph = std::make_unique<ccl::ShaderGraph>();
-        auto *bg = bg_graph->create_node<ccl::BackgroundNode>();
-        if (bg_debug) {
-            bg->set_color(ccl::make_float3(1.0f, 0.0f, 1.0f));
-            bg->set_strength(5.0f);
-        } else {
-            bg->set_color(ccl::make_float3(0.05f, 0.05f, 0.05f));
-            bg->set_strength(1.0f);
-        }
-        bg_graph->connect(bg->output("Background"),
-                          bg_graph->output()->input("Surface"));
-        scene->default_background->set_graph(std::move(bg_graph));
-        scene->default_background->tag_update(scene);
-    }
-
-    /* 2. Default light shader — Cycles initializes it with emission
-     *    strength=0, so the per-Light strength socket multiplies
-     *    against zero and the light contributes nothing. Bump the
-     *    shader's emission to unit strength so Light::strength behaves
-     *    as a power knob the caller expects. */
-    {
-        auto light_graph = std::make_unique<ccl::ShaderGraph>();
-        auto *em = light_graph->create_node<ccl::EmissionNode>();
-        em->set_color(ccl::make_float3(1.0f, 1.0f, 1.0f));
-        em->set_strength(1.0f);
-        light_graph->connect(em->output("Emission"),
-                             light_graph->output()->input("Surface"));
-        scene->default_light->set_graph(std::move(light_graph));
-        scene->default_light->tag_update(scene);
-    }
+    /* Defer Pass + integrator + default-shader tweaks until
+     * cyc_session_reset — that's the point cycles_standalone uses
+     * to commit scene state via Session::reset, and doing all of
+     * this BEFORE the caller has added geometry/lights/shaders
+     * caused macOS arm64 CPU to write zero-radiance samples
+     * (alpha=1 accumulated, RGB stayed at the buffer's init zero).
+     * Linux x64 happened to tolerate the early setup; macOS did not.
+     * We track the "did defer init run yet" via wrap->deferred_init
+     * so subsequent resets (resize / IPR restart) are no-ops here. */
 
     *out_session = from_session(wrap);
     return CYC_OK;
@@ -569,6 +524,63 @@ cyc_status cyc_session_reset(cyc_session_t *h, int w, int height)
         scene->camera->set_viewplane_right(scene->camera->viewplane.right);
         scene->camera->set_viewplane_top(scene->camera->viewplane.top);
         scene->camera->set_viewplane_bottom(scene->camera->viewplane.bottom);
+    }
+
+    /* Deferred init — runs ONCE on the first session_reset call. We
+     * delay these until the caller has already populated the scene
+     * (geometry / lights / shaders / camera) because macOS arm64 CPU
+     * reproducibly renders zero-radiance samples (alpha=1 accumulates
+     * but RGB stays at the buffer's init zero) when these are done at
+     * cyc_session_create time before any user content lands. The
+     * standalone cycles app (which works fine on macOS arm64 CPU)
+     * does its analogous setup right here: create Pass, integrator
+     * tweaks, world-shader prep — all after scene_init() and before
+     * session->reset(). Mirror that order. Linux x64 tolerated the
+     * pre-content init; the late init keeps Linux working too. */
+    if (!wrap->deferred_init_done) {
+        ccl::Scene *scene_now = wrap->session->scene.get();
+
+        ccl::Pass *pass = scene_now->create_node<ccl::Pass>();
+        pass->set_name(ccl::ustring("combined"));
+        pass->set_type(ccl::PASS_COMBINED);
+
+        if (scene_now->integrator) {
+            scene_now->integrator->set_min_bounce(0);
+            scene_now->integrator->set_max_bounce(8);
+        }
+
+        {
+            /* CYC_BG_DEBUG=1 — paint default_background bright magenta.
+             * Diagnostic for "black render" reports; left in to help
+             * isolate background- vs surface-shading issues. */
+            const bool bg_debug = std::getenv("CYC_BG_DEBUG") != nullptr;
+            auto bg_graph = std::make_unique<ccl::ShaderGraph>();
+            auto *bg = bg_graph->create_node<ccl::BackgroundNode>();
+            if (bg_debug) {
+                bg->set_color(ccl::make_float3(1.0f, 0.0f, 1.0f));
+                bg->set_strength(5.0f);
+            } else {
+                bg->set_color(ccl::make_float3(0.05f, 0.05f, 0.05f));
+                bg->set_strength(1.0f);
+            }
+            bg_graph->connect(bg->output("Background"),
+                              bg_graph->output()->input("Surface"));
+            scene_now->default_background->set_graph(std::move(bg_graph));
+            scene_now->default_background->tag_update(scene_now);
+        }
+
+        {
+            auto light_graph = std::make_unique<ccl::ShaderGraph>();
+            auto *em = light_graph->create_node<ccl::EmissionNode>();
+            em->set_color(ccl::make_float3(1.0f, 1.0f, 1.0f));
+            em->set_strength(1.0f);
+            light_graph->connect(em->output("Emission"),
+                                 light_graph->output()->input("Surface"));
+            scene_now->default_light->set_graph(std::move(light_graph));
+            scene_now->default_light->tag_update(scene_now);
+        }
+
+        wrap->deferred_init_done = true;
     }
 
     wrap->session->reset(wrap->session->params, wrap->buffer_params);

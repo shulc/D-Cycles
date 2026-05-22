@@ -203,6 +203,11 @@ struct SessionWrapper {
     int                               width  = 0;
     int                               height = 0;
     bool                              started = false;
+    /* Deferred init (Pass + integrator + default-shader overrides)
+     * runs once on the first cyc_session_reset call — see the
+     * comment block in that function for the rationale. */
+    bool                              deferred_init_done = false;
+    int                               interactive = 0;
 };
 
 /* Forward/back casts. Keep all reinterpret_cast in one place. */
