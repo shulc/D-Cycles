@@ -173,7 +173,7 @@ if [[ "${1:-}" == "--reconfigure" ]] || [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]
         -DWITH_CYCLES_DEVICE_ONEAPI=OFF \
         -DWITH_CYCLES_HIP_BINARIES=OFF \
         \
-        -DWITH_CYCLES_EMBREE=ON \
+        -DWITH_CYCLES_EMBREE="${WITH_EMBREE:-ON}" \
         -DWITH_CYCLES_OSL=OFF \
         -DWITH_CYCLES_OPENSUBDIV=OFF \
         -DWITH_CYCLES_PATH_GUIDING=OFF \
