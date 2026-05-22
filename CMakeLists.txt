@@ -179,6 +179,36 @@ if(WITH_CYCLES)
     set(_ZLIB "${LIBDIR}/zlib/lib/libz.a")
     set(_ZSTD "${LIBDIR}/zstd/lib/libzstd.a")
 
+    # ---- SSE / NEON ABI parity ---------------------------------------
+    # Cycles' util/optimization.h enables __KERNEL_SSE__ on Apple Silicon
+    # *only* when WITH_SSE2NEON is defined. That flag flips util/types_float3.h
+    # from a plain {float x,y,z,w} POD into a union with __m128 and conversion
+    # operators — same size/alignment, but different AAPCS64 ABI class for
+    # parameter passing (HFA vs non-HFA). Cycles libs are built with the flag
+    # on (via test_neon_support() + add_definitions(-DWITH_SSE2NEON) in
+    # Blender's top-level CMakeLists.txt), so our shim must match or every
+    # float3 crossing the Node::set/get boundary is corrupted. See
+    # doc/cycles_macos_arm64_black_render_debug.md for the full trace.
+    set(_d_cycles_need_sse2neon FALSE)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+        set(_d_cycles_need_sse2neon TRUE)
+    endif()
+    # NOTE: Windows ARM64 (_M_ARM64) and Linux ARM64 would need the same
+    # treatment, but _BLENDER_LIBDIR only knows linux_x64/macos_arm64/windows_x64
+    # today — extend both places together when adding those hosts.
+
+    if(_d_cycles_need_sse2neon)
+        set(_SSE2NEON_INCLUDE "${LIBDIR}/sse2neon/include")
+        if(NOT EXISTS "${_SSE2NEON_INCLUDE}/sse2neon.h")
+            message(FATAL_ERROR
+                "sse2neon.h not found at ${_SSE2NEON_INCLUDE}. "
+                "Cycles libs on Apple Silicon are built with WITH_SSE2NEON, "
+                "so our shim needs the matching header to keep float3 ABI in sync. "
+                "Make sure the precompiled deps submodule under "
+                "${BLENDER_SRC}/${_BLENDER_LIBDIR} is fully checked out.")
+        endif()
+    endif()
+
     # ---- cyclesc target wiring ---------------------------------------
     # intern/atomic is sibling to intern/cycles; util/atomic.h does
     # `#include "atomic_ops.h"` so the dir containing that header must
@@ -202,6 +232,9 @@ if(WITH_CYCLES)
         "${LIBDIR}/opensubdiv/include"
         "${LIBDIR}/pugixml/include"
     )
+    if(_d_cycles_need_sse2neon)
+        target_include_directories(cyclesc PRIVATE "${_SSE2NEON_INCLUDE}")
+    endif()
     # These two definitions act as inline `namespace ccl {` / `}` so
     # Cycles headers compile in our TU. Match Blender's invocation:
     # -DCCL_NAMESPACE_BEGIN=namespace ccl { -DCCL_NAMESPACE_END=}
@@ -215,6 +248,9 @@ if(WITH_CYCLES)
         WITH_CYCLES_LOGGING
         "CYCLES_GFLAGS_NAMESPACE="
     )
+    if(_d_cycles_need_sse2neon)
+        target_compile_definitions(cyclesc PRIVATE WITH_SSE2NEON)
+    endif()
     if(_d_cycles_have_gpu)
         target_compile_definitions(cyclesc PRIVATE WITH_CYCLES_CUEW)
     endif()
