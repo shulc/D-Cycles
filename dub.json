@@ -40,6 +40,7 @@
         "-L$PACKAGE_DIR/build",
         "-L$PACKAGE_DIR/extern/blender/build_cycles/lib",
 
+        "-rpath=$$ORIGIN/lib",
         "-rpath=$PACKAGE_DIR/extern/blender/lib/linux_x64/openimageio/lib",
         "-rpath=$PACKAGE_DIR/extern/blender/lib/linux_x64/opencolorio/lib",
         "-rpath=$PACKAGE_DIR/extern/blender/lib/linux_x64/embree/lib",
@@ -99,6 +100,7 @@
         "-L$PACKAGE_DIR/build",
         "-L$PACKAGE_DIR/extern/blender/build_cycles/lib",
 
+        "-rpath", "@executable_path/lib",
         "-rpath", "$PACKAGE_DIR/extern/blender/lib/macos_arm64/openimageio/lib",
         "-rpath", "$PACKAGE_DIR/extern/blender/lib/macos_arm64/opencolorio/lib",
         "-rpath", "$PACKAGE_DIR/extern/blender/lib/macos_arm64/embree/lib",
