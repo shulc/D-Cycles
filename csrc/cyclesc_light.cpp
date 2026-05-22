@@ -27,6 +27,8 @@
 #include "util/transform.h"
 #include "util/types.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 
 using namespace cyc_internal;
@@ -54,6 +56,13 @@ cyc_status cyc_light_create(cyc_scene_t *scene_h, cyc_light_type type, cyc_light
         light->set_light_type(map_light_type(type));
         if (type == CYC_LIGHT_AREA_DISK) light->set_ellipse(true);
         light->set_strength(ccl::make_float3(1.0f, 1.0f, 1.0f));
+        if (std::getenv("CYC_LIGHT_TRACE") != nullptr) {
+            const ccl::float3 after = light->get_strength();
+            std::fprintf(stderr,
+                "[cyc:light] create: after set_strength(1,1,1) → get_strength=(%.3f,%.3f,%.3f)\n",
+                after.x, after.y, after.z);
+            std::fflush(stderr);
+        }
         light->set_is_enabled(true);
         light->set_use_mis(true);
 
@@ -133,7 +142,19 @@ cyc_status cyc_light_set_color(cyc_light_t *h, float r, float g, float b)
     /* Preserve intensity (the max channel), tint via the rest. */
     const ccl::float3 cur = L->get_strength();
     const float intensity = ccl::max(cur.x, ccl::max(cur.y, cur.z));
+    if (std::getenv("CYC_LIGHT_TRACE") != nullptr) {
+        std::fprintf(stderr,
+            "[cyc:light] set_color(%.3f,%.3f,%.3f): cur=(%.3f,%.3f,%.3f) intensity=%.3f\n",
+            r, g, b, cur.x, cur.y, cur.z, intensity);
+    }
     L->set_strength(ccl::make_float3(r * intensity, g * intensity, b * intensity));
+    if (std::getenv("CYC_LIGHT_TRACE") != nullptr) {
+        const ccl::float3 after = L->get_strength();
+        std::fprintf(stderr,
+            "[cyc:light] set_color done: after=(%.3f,%.3f,%.3f)\n",
+            after.x, after.y, after.z);
+        std::fflush(stderr);
+    }
     return CYC_OK;
 }
 
@@ -145,11 +166,23 @@ cyc_status cyc_light_set_intensity(cyc_light_t *h, float intensity)
     /* Normalize to current color hue, multiply by new intensity. */
     const ccl::float3 cur = L->get_strength();
     const float current = ccl::max(cur.x, ccl::max(cur.y, cur.z));
+    if (std::getenv("CYC_LIGHT_TRACE") != nullptr) {
+        std::fprintf(stderr,
+            "[cyc:light] set_intensity(%.3f): cur=(%.3f,%.3f,%.3f) current=%.3f\n",
+            intensity, cur.x, cur.y, cur.z, current);
+    }
     if (current > 0.0f) {
         const float k = intensity / current;
         L->set_strength(ccl::make_float3(cur.x * k, cur.y * k, cur.z * k));
     } else {
         L->set_strength(ccl::make_float3(intensity, intensity, intensity));
+    }
+    if (std::getenv("CYC_LIGHT_TRACE") != nullptr) {
+        const ccl::float3 after = L->get_strength();
+        std::fprintf(stderr,
+            "[cyc:light] set_intensity done: after=(%.3f,%.3f,%.3f)\n",
+            after.x, after.y, after.z);
+        std::fflush(stderr);
     }
     return CYC_OK;
 }
