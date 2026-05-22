@@ -34,19 +34,36 @@ int main(string[] args)
     }
 
     // 2. Session ------------------------------------------------------
-    // Default to OPTIX (RT-cores on NVIDIA), fall back to CPU if not
-    // available. Override via CYC_DEVICE env var (CPU / CUDA / OPTIX).
+    // Pick the best device that's actually visible in the enumeration
+    // above. CYC_DEVICE env override wins; otherwise the platform-
+    // appropriate accelerator (OPTIX on NVIDIA Linux/Windows, METAL on
+    // Apple Silicon) is preferred, falling back to CPU which always
+    // works. Picking a device that the build wasn't compiled with —
+    // e.g. OPTIX on macOS where the Cycles libs ship without it —
+    // returns CYC_ERR_UNSUPPORTED (-4) at session_create; this loop
+    // sidesteps that by only choosing from devs[].
     auto pick_device = () {
         import std.process : environment;
-        const env = environment.get("CYC_DEVICE", "OPTIX");
-        switch (env) {
-            case "CPU":    return cyc_device_type.CPU;
-            case "CUDA":   return cyc_device_type.CUDA;
-            case "OPTIX":  return cyc_device_type.OPTIX;
-            case "HIP":    return cyc_device_type.HIP;
-            case "METAL":  return cyc_device_type.METAL;
-            default:       return cyc_device_type.CPU;
+        cyc_device_type[] preferred;
+        if (auto env = environment.get("CYC_DEVICE")) {
+            switch (env) {
+                case "CPU":   preferred = [cyc_device_type.CPU];   break;
+                case "CUDA":  preferred = [cyc_device_type.CUDA];  break;
+                case "OPTIX": preferred = [cyc_device_type.OPTIX]; break;
+                case "HIP":   preferred = [cyc_device_type.HIP];   break;
+                case "METAL": preferred = [cyc_device_type.METAL]; break;
+                default:      preferred = [cyc_device_type.CPU];   break;
+            }
+        } else {
+            version (OSX)          preferred = [cyc_device_type.METAL, cyc_device_type.CPU];
+            else version (Windows) preferred = [cyc_device_type.OPTIX, cyc_device_type.CUDA, cyc_device_type.CPU];
+            else                   preferred = [cyc_device_type.OPTIX, cyc_device_type.CUDA, cyc_device_type.CPU];
         }
+        foreach (want; preferred)
+            foreach (i; 0 .. count)
+                if (devs[i].type == want)
+                    return want;
+        return cyc_device_type.CPU;
     };
     cyc_session_params sp = {
         device_type:  pick_device(),
