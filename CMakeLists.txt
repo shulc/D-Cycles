@@ -87,11 +87,26 @@ if(WITH_CYCLES)
             "  git -C extern/blender config --local submodule.${_BLENDER_LIBDIR}.update checkout\n"
             "  git -C extern/blender submodule update --init --depth 1 ${_BLENDER_LIBDIR}")
     endif()
-    if(NOT EXISTS "${CYCLES_BUILD_DIR}/lib/libcycles_session.a")
-        message(FATAL_ERROR
-            "Cycles static libs not built. Run:\n"
-            "  tools/build_cycles_libs.sh\n"
-            "This produces lib*.a in ${CYCLES_BUILD_DIR}/lib/.")
+    # ---- Locate the cycles static libs (platform-specific layout) ------
+    # MSVC multi-config generators put libs in lib/Debug/ or lib/Release/.
+    # Unix generators put them directly in lib/ as lib*.a.
+    if(WIN32)
+        if(EXISTS "${CYCLES_BUILD_DIR}/lib/Release/cycles_session.lib")
+            set(_cycles_lib_subdir "Release")
+        elseif(EXISTS "${CYCLES_BUILD_DIR}/lib/Debug/cycles_session.lib")
+            set(_cycles_lib_subdir "Debug")
+        else()
+            message(FATAL_ERROR
+                "Cycles static libs not built. Run the cmake --build step in dub.json.\n"
+                "Expected: ${CYCLES_BUILD_DIR}/lib/Release/cycles_session.lib")
+        endif()
+    else()
+        if(NOT EXISTS "${CYCLES_BUILD_DIR}/lib/libcycles_session.a")
+            message(FATAL_ERROR
+                "Cycles static libs not built. Run:\n"
+                "  tools/build_cycles_libs.sh\n"
+                "This produces lib*.a in ${CYCLES_BUILD_DIR}/lib/.")
+        endif()
     endif()
 
     # ---- Cycles core + helper libs (IMPORTED) ------------------------
@@ -112,72 +127,111 @@ if(WITH_CYCLES)
     # WITH_CYCLES_DEVICE_CUDA/OPTIX builds drop extern_cuew (CUDA dynload
     # stubs) alongside. Detect it on disk so a CPU-only build doesn't
     # require the lib to exist.
-    if(EXISTS "${CYCLES_BUILD_DIR}/lib/libextern_cuew.a")
+    if(WIN32)
+        set(_d_cycles_have_gpu FALSE)  # CPU-only on Windows for now
+    elseif(EXISTS "${CYCLES_BUILD_DIR}/lib/libextern_cuew.a")
         list(APPEND _cycles_static_libs extern_cuew)
         set(_d_cycles_have_gpu TRUE)
     else()
         set(_d_cycles_have_gpu FALSE)
     endif()
-    foreach(_lib IN LISTS _cycles_static_libs)
-        if(NOT EXISTS "${CYCLES_BUILD_DIR}/lib/lib${_lib}.a")
-            message(FATAL_ERROR
-                "Missing ${CYCLES_BUILD_DIR}/lib/lib${_lib}.a — "
-                "re-run tools/build_cycles_libs.sh --reconfigure")
-        endif()
-        add_library(${_lib} STATIC IMPORTED GLOBAL)
-        set_target_properties(${_lib} PROPERTIES
-            IMPORTED_LOCATION "${CYCLES_BUILD_DIR}/lib/lib${_lib}.a")
-    endforeach()
+    if(WIN32)
+        foreach(_lib IN LISTS _cycles_static_libs)
+            set(_lib_path "${CYCLES_BUILD_DIR}/lib/${_cycles_lib_subdir}/${_lib}.lib")
+            if(NOT EXISTS "${_lib_path}")
+                message(FATAL_ERROR
+                    "Missing ${_lib_path} — re-run the cmake --build cycles step")
+            endif()
+            add_library(${_lib} STATIC IMPORTED GLOBAL)
+            set_target_properties(${_lib} PROPERTIES IMPORTED_LOCATION "${_lib_path}")
+        endforeach()
+    else()
+        foreach(_lib IN LISTS _cycles_static_libs)
+            if(NOT EXISTS "${CYCLES_BUILD_DIR}/lib/lib${_lib}.a")
+                message(FATAL_ERROR
+                    "Missing ${CYCLES_BUILD_DIR}/lib/lib${_lib}.a — "
+                    "re-run tools/build_cycles_libs.sh --reconfigure")
+            endif()
+            add_library(${_lib} STATIC IMPORTED GLOBAL)
+            set_target_properties(${_lib} PROPERTIES
+                IMPORTED_LOCATION "${CYCLES_BUILD_DIR}/lib/lib${_lib}.a")
+        endforeach()
+    endif()
 
     # ---- Third-party libs from extern/blender/${_BLENDER_LIBDIR} ------
-    # We mirror what extern/blender/build_cycles/bin/cycles actually
-    # links to (verified via ldd/otool). Shared libs are referenced by their
-    # versioned soname so the runtime dynamic loader doesn't need a
-    # rebuild-the-symlinks dance — the unversioned .so/.dylib/.dll symlinks
-    # point at the same files. Static libs (.a) are direct.
-    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-        set(_SHARED_LIB_EXT ".dylib")
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        set(_SHARED_LIB_EXT ".dll")
+    # Windows: Blender ships import libs (.lib) in lib/ and DLLs in bin/.
+    #   Link against import libs; DLL names often differ from lib prefix.
+    #   No "lib" prefix on Windows. Some libs are static-only (.lib, no DLL).
+    # Unix: .so/.dylib in lib/, named lib<name>.so. Static deps are .a.
+    if(WIN32)
+        function(d_cycles_pick_implib var dir name)
+            set(path "${LIBDIR}/${dir}/lib/${name}.lib")
+            if(NOT EXISTS "${path}")
+                message(FATAL_ERROR "import lib not found: ${path}")
+            endif()
+            set(${var} "${path}" PARENT_SCOPE)
+        endfunction()
+        d_cycles_pick_implib(_OIIO     "openimageio" "OpenImageIO")
+        d_cycles_pick_implib(_OIIO_UTL "openimageio" "OpenImageIO_Util")
+        d_cycles_pick_implib(_OCIO     "opencolorio" "OpenColorIO")
+        d_cycles_pick_implib(_TBB      "tbb"         "tbb12")
+        d_cycles_pick_implib(_EMBREE   "embree"      "embree4")
+        d_cycles_pick_implib(_OIDN     "openimagedenoise" "openimagedenoise")
+        d_cycles_pick_implib(_OPENEXR  "openexr"     "OpenEXR")
+        d_cycles_pick_implib(_OEXRCORE "openexr"     "OpenEXRCore")
+        d_cycles_pick_implib(_IEX      "openexr"     "Iex")
+        d_cycles_pick_implib(_ILMTHR   "openexr"     "IlmThread")
+        d_cycles_pick_implib(_IMATH    "imath"       "Imath")
+        d_cycles_pick_implib(_OSD_CPU  "opensubdiv"  "osdCPU")
+        set(_SYCL "")  # dpcpp/SYCL not yet wired for Windows
+        # Static-only deps on Windows
+        set(_PUGIXML "${LIBDIR}/pugixml/lib/pugixml.lib")
+        set(_PNG  "${LIBDIR}/png/lib/libpng.lib")
+        set(_JPEG "${LIBDIR}/jpeg/lib/libjpeg.lib")
+        set(_TIFF "${LIBDIR}/tiff/lib/libtiff.lib")
+        set(_OPENJPEG "${LIBDIR}/openjpeg/lib/openjp2.lib")
+        set(_WEBP "${LIBDIR}/webp/lib/libwebp.lib")
+        set(_ZLIB "${LIBDIR}/zlib/lib/libz_st.lib")
+        set(_ZSTD "${LIBDIR}/zstd/lib/zstd_static.lib")
     else()
-        set(_SHARED_LIB_EXT ".so")
-    endif()
-
-    function(d_cycles_pick_so var lib_name)
-        set(path "${LIBDIR}/${lib_name}${_SHARED_LIB_EXT}")
-        if(NOT EXISTS "${path}")
-            message(FATAL_ERROR "shared library not found: ${path}")
+        if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+            set(_SHARED_LIB_EXT ".dylib")
+        else()
+            set(_SHARED_LIB_EXT ".so")
         endif()
-        set(${var} "${path}" PARENT_SCOPE)
-    endfunction()
-
-    d_cycles_pick_so(_OIIO     "openimageio/lib/libOpenImageIO")
-    d_cycles_pick_so(_OIIO_UTL "openimageio/lib/libOpenImageIO_Util")
-    d_cycles_pick_so(_OCIO     "opencolorio/lib/libOpenColorIO")
-    d_cycles_pick_so(_TBB      "tbb/lib/libtbb")
-    d_cycles_pick_so(_EMBREE   "embree/lib/libembree4")
-    d_cycles_pick_so(_OIDN     "openimagedenoise/lib/libOpenImageDenoise")
-    d_cycles_pick_so(_OPENEXR  "openexr/lib/libOpenEXR")
-    d_cycles_pick_so(_OEXRCORE "openexr/lib/libOpenEXRCore")
-    d_cycles_pick_so(_IEX      "openexr/lib/libIex")
-    d_cycles_pick_so(_ILMTHR   "openexr/lib/libIlmThread")
-    d_cycles_pick_so(_IMATH    "imath/lib/libImath")
-    d_cycles_pick_so(_OSD_CPU  "opensubdiv/lib/libosdCPU")
-    # SYCL (Intel oneAPI dpcpp) is Linux/Windows x86_64 only — not shipped on macOS
-    set(_SYCL "")
-    if(EXISTS "${LIBDIR}/dpcpp/lib/libsycl${_SHARED_LIB_EXT}")
-        d_cycles_pick_so(_SYCL "dpcpp/lib/libsycl")
+        function(d_cycles_pick_so var lib_name)
+            set(path "${LIBDIR}/${lib_name}${_SHARED_LIB_EXT}")
+            if(NOT EXISTS "${path}")
+                message(FATAL_ERROR "shared library not found: ${path}")
+            endif()
+            set(${var} "${path}" PARENT_SCOPE)
+        endfunction()
+        d_cycles_pick_so(_OIIO     "openimageio/lib/libOpenImageIO")
+        d_cycles_pick_so(_OIIO_UTL "openimageio/lib/libOpenImageIO_Util")
+        d_cycles_pick_so(_OCIO     "opencolorio/lib/libOpenColorIO")
+        d_cycles_pick_so(_TBB      "tbb/lib/libtbb")
+        d_cycles_pick_so(_EMBREE   "embree/lib/libembree4")
+        d_cycles_pick_so(_OIDN     "openimagedenoise/lib/libOpenImageDenoise")
+        d_cycles_pick_so(_OPENEXR  "openexr/lib/libOpenEXR")
+        d_cycles_pick_so(_OEXRCORE "openexr/lib/libOpenEXRCore")
+        d_cycles_pick_so(_IEX      "openexr/lib/libIex")
+        d_cycles_pick_so(_ILMTHR   "openexr/lib/libIlmThread")
+        d_cycles_pick_so(_IMATH    "imath/lib/libImath")
+        d_cycles_pick_so(_OSD_CPU  "opensubdiv/lib/libosdCPU")
+        set(_SYCL "")
+        if(EXISTS "${LIBDIR}/dpcpp/lib/libsycl${_SHARED_LIB_EXT}")
+            d_cycles_pick_so(_SYCL "dpcpp/lib/libsycl")
+        endif()
+        # Static deps where Blender ships .a only.
+        set(_PUGIXML "${LIBDIR}/pugixml/lib/libpugixml.a")
+        set(_PNG  "${LIBDIR}/png/lib/libpng16.a")
+        set(_JPEG "${LIBDIR}/jpeg/lib/libjpeg.a")
+        set(_TIFF "${LIBDIR}/tiff/lib/libtiff.a")
+        set(_OPENJPEG "${LIBDIR}/openjpeg/lib/libopenjp2.a")
+        set(_WEBP "${LIBDIR}/webp/lib/libwebp.a")
+        set(_ZLIB "${LIBDIR}/zlib/lib/libz.a")
+        set(_ZSTD "${LIBDIR}/zstd/lib/libzstd.a")
     endif()
-
-    # Static deps where Blender ships .a only.
-    set(_PUGIXML "${LIBDIR}/pugixml/lib/libpugixml.a")
-    set(_PNG  "${LIBDIR}/png/lib/libpng16.a")
-    set(_JPEG "${LIBDIR}/jpeg/lib/libjpeg.a")
-    set(_TIFF "${LIBDIR}/tiff/lib/libtiff.a")
-    set(_OPENJPEG "${LIBDIR}/openjpeg/lib/libopenjp2.a")
-    set(_WEBP "${LIBDIR}/webp/lib/libwebp.a")
-    set(_ZLIB "${LIBDIR}/zlib/lib/libz.a")
-    set(_ZSTD "${LIBDIR}/zstd/lib/libzstd.a")
 
     # ---- SSE / NEON ABI parity ---------------------------------------
     # Cycles' util/optimization.h enables __KERNEL_SSE__ on Apple Silicon
@@ -245,11 +299,12 @@ if(WITH_CYCLES)
         CYCLES_AVAILABLE=1
         "CCL_NAMESPACE_BEGIN=namespace ccl {"
         "CCL_NAMESPACE_END=}"
-        # Cycles util/log.h pulls glog; the LOG/CHECK macros work in
-        # both with-logging and stubbed forms. Cycles itself was built
-        # WITH_CYCLES_LOGGING=ON, so we follow suit for ABI parity.
-        WITH_CYCLES_LOGGING
-        "CYCLES_GFLAGS_NAMESPACE="
+        # glog/logging.h includes <unistd.h> (hardcoded Linux cmake output)
+        # which does not exist on MSVC. util/log.h provides complete stub
+        # macros when WITH_CYCLES_LOGGING is absent, so drop it on Windows.
+        # ABI parity is maintained: the logging macros are macro/inline-only.
+        $<$<NOT:$<PLATFORM_ID:Windows>>:WITH_CYCLES_LOGGING>
+        $<$<NOT:$<PLATFORM_ID:Windows>>:CYCLES_GFLAGS_NAMESPACE=>
         # Default runtime root used by ensure_global_init() when
         # CYCLESC_KERNEL_PATH is unset. Contains lib/ (CUDA *.zst
         # binaries) and source/ (symlink to intern/cycles for Metal's
@@ -262,9 +317,13 @@ if(WITH_CYCLES)
     if(_d_cycles_have_gpu)
         target_compile_definitions(cyclesc PRIVATE WITH_CYCLES_CUEW)
     endif()
-    target_compile_options(cyclesc PRIVATE -fno-trapping-math -fno-math-errno
-                                            -fno-signed-zeros -ffp-contract=fast
-                                            -fno-signaling-nans -fno-rounding-math)
+    if(MSVC)
+        target_compile_options(cyclesc PRIVATE /fp:fast)
+    else()
+        target_compile_options(cyclesc PRIVATE -fno-trapping-math -fno-math-errno
+                                               -fno-signed-zeros -ffp-contract=fast
+                                               -fno-signaling-nans -fno-rounding-math)
+    endif()
 
     # Static lib link order matters; group resolves circular deps.
     set(_d_cycles_group_libs
@@ -304,7 +363,7 @@ if(WITH_CYCLES)
         ${_TBB}
         ${_PNG} ${_JPEG} ${_TIFF} ${_OPENJPEG} ${_WEBP}
         ${_ZLIB} ${_ZSTD}
-        pthread m ${CMAKE_DL_LIBS}
+        $<$<NOT:$<PLATFORM_ID:Windows>>:pthread m ${CMAKE_DL_LIBS}>
     )
 
     # Apple Silicon: libcycles_device.a's Metal device sources
@@ -325,28 +384,26 @@ if(WITH_CYCLES)
         )
     endif()
 
-    # Make the precompiled .so libs findable at runtime without
-    # LD_LIBRARY_PATH. Consumers of cyclesc still need their own RPATH
-    # set, but for the static cyclesc.a this lets the example app link
-    # via INTERFACE_LINK_DIRECTORIES.
-    set(_d_cycles_runtime_dirs
-        "${LIBDIR}/openimageio/lib"
-        "${LIBDIR}/opencolorio/lib"
-        "${LIBDIR}/embree/lib"
-        "${LIBDIR}/openimagedenoise/lib"
-        "${LIBDIR}/openexr/lib"
-        "${LIBDIR}/imath/lib"
-        "${LIBDIR}/opensubdiv/lib"
-        "${LIBDIR}/dpcpp/lib"
-        "${LIBDIR}/tbb/lib"
-    )
-    set_target_properties(cyclesc PROPERTIES
-        INTERFACE_LINK_DIRECTORIES "${_d_cycles_runtime_dirs}")
-    # Encode the RPATH onto cyclesc itself so any test executable picks
-    # it up via the static-lib transitive properties.
-    foreach(_d IN LISTS _d_cycles_runtime_dirs)
-        target_link_options(cyclesc INTERFACE "LINKER:-rpath,${_d}")
-    endforeach()
+    # Make the precompiled .so libs findable at runtime without LD_LIBRARY_PATH.
+    # Not applicable on Windows — DLLs are resolved via PATH or exe directory.
+    if(NOT WIN32)
+        set(_d_cycles_runtime_dirs
+            "${LIBDIR}/openimageio/lib"
+            "${LIBDIR}/opencolorio/lib"
+            "${LIBDIR}/embree/lib"
+            "${LIBDIR}/openimagedenoise/lib"
+            "${LIBDIR}/openexr/lib"
+            "${LIBDIR}/imath/lib"
+            "${LIBDIR}/opensubdiv/lib"
+            "${LIBDIR}/dpcpp/lib"
+            "${LIBDIR}/tbb/lib"
+        )
+        set_target_properties(cyclesc PROPERTIES
+            INTERFACE_LINK_DIRECTORIES "${_d_cycles_runtime_dirs}")
+        foreach(_d IN LISTS _d_cycles_runtime_dirs)
+            target_link_options(cyclesc INTERFACE "LINKER:-rpath,${_d}")
+        endforeach()
+    endif()
 
     message(STATUS "D-Cycles: linking against ${CYCLES_BUILD_DIR}")
     message(STATUS "  LIBDIR = ${LIBDIR}")
