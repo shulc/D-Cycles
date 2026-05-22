@@ -57,6 +57,27 @@ cyc_status cyc_session_save_image(cyc_session_t *h, const char *file_path)
     std::vector<float> pixels(static_cast<size_t>(w) * height * 4);
     if (!wrap->capture->copy_pixels(pixels.data(), w, height)) return CYC_ERR_INTERNAL;
 
+    /* Diagnostic: log raw-pixel min/max BEFORE gamma so a black PNG can
+     * be told apart from "rendered something dim that the gamma curve
+     * crushed". Triangle.png on macOS arm64 CPU was reproducibly
+     * coming out black; this trace tells us whether the framebuffer
+     * was empty (rendering bug) or just dark (post-process bug). */
+    if (std::getenv("CYC_SAVE_TRACE") != nullptr) {
+        float mn = pixels.empty() ? 0 : pixels[0];
+        float mx = mn;
+        double sum = 0;
+        for (float v : pixels) {
+            if (v < mn) mn = v;
+            if (v > mx) mx = v;
+            sum += v;
+        }
+        const double mean = pixels.empty() ? 0 : sum / pixels.size();
+        std::fprintf(stderr,
+            "[cyclesc] save_image raw: w=%d h=%d min=%.4f max=%.4f mean=%.4f\n",
+            w, height, mn, mx, mean);
+        std::fflush(stderr);
+    }
+
     /* Apply sRGB gamma for non-linear file formats. EXR/HDR keep linear. */
     if (is_srgb_format(file_path)) {
         const float g = 1.0f / 2.2f;
