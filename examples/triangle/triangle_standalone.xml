@@ -1,0 +1,35 @@
+<cycles>
+  <camera width="512" height="512" />
+
+  <transform translate="0 0 3" rotate="180 0 1 0">
+    <camera type="perspective" fov="0.785398" />
+  </transform>
+
+  <background>
+    <background name="bg" color="0.05, 0.05, 0.05" strength="1.0" />
+    <connect from="bg background" to="output surface" />
+  </background>
+
+  <shader name="red">
+    <principled_bsdf name="bsdf" base_color="0.85, 0.25, 0.15" roughness="0.6" />
+    <connect from="bsdf bsdf" to="output surface" />
+  </shader>
+
+  <state shader="red">
+    <mesh
+        P="0 0.8 0  -0.8 -0.6 0  0.8 -0.6 0"
+        verts="0 1 2"
+        nverts="3" />
+  </state>
+
+  <shader name="emit">
+    <emission name="e" color="1 1 1" strength="100" />
+    <connect from="e emission" to="output surface" />
+  </shader>
+
+  <state shader="emit">
+    <transform translate="0 2 2">
+      <light type="point" />
+    </transform>
+  </state>
+</cycles>
