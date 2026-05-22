@@ -213,6 +213,7 @@
         "/LIBPATH:$PACKAGE_DIR/extern/blender/lib/windows_x64/openexr/lib",
         "/LIBPATH:$PACKAGE_DIR/extern/blender/lib/windows_x64/imath/lib",
         "/LIBPATH:$PACKAGE_DIR/extern/blender/lib/windows_x64/pugixml/lib",
+        "$PACKAGE_DIR/extern/blender/lib/windows_x64/opensubdiv/lib/osdCPU.lib",
         "/LIBPATH:$PACKAGE_DIR/extern/blender/lib/windows_x64/png/lib",
         "/LIBPATH:$PACKAGE_DIR/extern/blender/lib/windows_x64/jpeg/lib",
         "/LIBPATH:$PACKAGE_DIR/extern/blender/lib/windows_x64/tiff/lib",
