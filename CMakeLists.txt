@@ -250,6 +250,11 @@ if(WITH_CYCLES)
         # WITH_CYCLES_LOGGING=ON, so we follow suit for ABI parity.
         WITH_CYCLES_LOGGING
         "CYCLES_GFLAGS_NAMESPACE="
+        # Default runtime root used by ensure_global_init() when
+        # CYCLESC_KERNEL_PATH is unset. Contains lib/ (CUDA *.zst
+        # binaries) and source/ (symlink to intern/cycles for Metal's
+        # JIT compile). Production deploys move it via the env var.
+        "CYCLESC_DEFAULT_KERNEL_PATH=\"${CYCLES_BUILD_DIR}/bin\""
     )
     if(_d_cycles_need_sse2neon)
         target_compile_definitions(cyclesc PRIVATE WITH_SSE2NEON)
@@ -301,6 +306,24 @@ if(WITH_CYCLES)
         ${_ZLIB} ${_ZSTD}
         pthread m ${CMAKE_DL_LIBS}
     )
+
+    # Apple Silicon: libcycles_device.a's Metal device sources
+    # (device/metal/*.mm) reference Metal/MetalKit/Foundation symbols
+    # via Objective-C runtime. Static libs don't propagate framework
+    # deps, so we re-declare them at the cyclesc link boundary. The
+    # frameworks are present even when WITH_METAL=0 was used to build
+    # Cycles libs (the .mm TUs aren't included then), so linking them
+    # unconditionally on Darwin arm64 is safe and removes a build-time
+    # split based on Cycles' WITH_METAL choice.
+    if(_d_cycles_need_sse2neon)
+        target_link_libraries(cyclesc PRIVATE
+            "-framework Metal"
+            "-framework MetalKit"
+            "-framework Foundation"
+            "-framework IOKit"
+            "-framework QuartzCore"
+        )
+    endif()
 
     # Make the precompiled .so libs findable at runtime without
     # LD_LIBRARY_PATH. Consumers of cyclesc still need their own RPATH

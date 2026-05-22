@@ -35,19 +35,31 @@ void ensure_global_init()
     std::call_once(once, [] {
         ccl::util_logging_init("cyclesc");
 
-        /* Cycles uses path_get("lib/<kernel>.cubin.zst" / ".ptx.zst") to
-         * locate GPU kernel binaries at runtime. Without an explicit
-         * path, it falls back to the directory of the running
-         * executable + "lib/". For the D-Cycles smoke tests the
-         * binaries live next to the executable but the kernels live in
-         * extern/blender/build_cycles/intern/cycles/ — let the caller
-         * point us at that root via CYCLESC_KERNEL_PATH. */
+        /* Cycles' path_get(sub) returns <cached_path>/sub. Different
+         * device backends ask for different subdirs:
+         *   - CUDA/OptiX: path_get("lib/kernel_*.ptx.zst") — precompiled.
+         *   - Metal:      path_get("source/kernel/device/metal/kernel.metal")
+         *                 — JIT-compiled at runtime from source.
+         * Both must resolve, so cached_path is a unified runtime root.
+         * tools/build_cycles_libs.sh stages this layout at
+         * ${CYCLES_BUILD_DIR}/bin (lib/ + source/ symlink), and CMake
+         * bakes that absolute path into CYCLESC_DEFAULT_KERNEL_PATH as
+         * the dev-tree fallback. CYCLESC_KERNEL_PATH env var still
+         * wins — required for deployed binaries where build_cycles
+         * doesn't exist alongside the running executable. */
         const char *kp = std::getenv("CYCLESC_KERNEL_PATH");
         if (kp && *kp) {
             ccl::path_init(kp, kp);
-        } else {
+        }
+#ifdef CYCLESC_DEFAULT_KERNEL_PATH
+        else {
+            ccl::path_init(CYCLESC_DEFAULT_KERNEL_PATH, CYCLESC_DEFAULT_KERNEL_PATH);
+        }
+#else
+        else {
             ccl::path_init();
         }
+#endif
 
 #ifdef WITH_CYCLES_CUEW
         /* Load libcuda.so + libnvrtc.so via cuew so the function

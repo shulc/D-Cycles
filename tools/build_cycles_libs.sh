@@ -246,7 +246,22 @@ if compgen -G "${KERNEL_DIR}/*.zst" >/dev/null; then
     cp -u "${KERNEL_DIR}"/*.zst "${DEST_DIR}/" 2>/dev/null || true
 fi
 
+# Verify Blender's delayed_install populated the source tree at
+# ${BUILD_DIR}/bin/source/kernel/device/metal/kernel.metal — that's
+# what Cycles' Metal device JIT-compiles via path_get("source/...").
+# Without this layout (e.g. an older Blender that skipped the install
+# step), Metal renders fail with "kernel.metal file not found".
+METAL_KERNEL="${BUILD_DIR}/bin/source/kernel/device/metal/kernel.metal"
+if [[ "$OSTYPE" == "darwin"* ]] && [[ "${WITH_METAL:-0}" == "1" ]]; then
+    if [[ ! -f "${METAL_KERNEL}" ]]; then
+        echo "WARNING: Metal was requested but ${METAL_KERNEL} is missing." >&2
+        echo "  Cycles JIT will fail at render time. Check that the build" >&2
+        echo "  populated bin/source/ — try --reconfigure." >&2
+    fi
+fi
+
 echo
 echo ">>> Done."
-echo "  Static libs: ${BUILD_DIR}/lib/"
-echo "  Kernels:     ${DEST_DIR}/ (set CYCLESC_KERNEL_PATH=${BUILD_DIR}/bin to use at runtime)"
+echo "  Static libs:  ${BUILD_DIR}/lib/"
+echo "  GPU binaries: ${DEST_DIR}/"
+echo "  Runtime root: ${BUILD_DIR}/bin (baked into shim as default; override with CYCLESC_KERNEL_PATH)"
