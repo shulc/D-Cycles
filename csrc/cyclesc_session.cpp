@@ -413,16 +413,26 @@ cyc_status cyc_session_create(const cyc_session_params *params, cyc_session_t **
         return CYC_ERR_INTERNAL;
     }
 
-    /* Install both capture drivers. Cycles takes ownership; we
-     * remember borrowed pointers so we can read pixels (for
-     * Output: post-render final; for Display: progressive IPR). */
+    /* OutputDriver: always installed — final tile capture is needed
+     * for cyc_session_save_image / read_framebuffer regardless of
+     * interactive mode. */
     auto capture = std::make_unique<CapturingOutputDriver>();
     wrap->capture = capture.get();
     wrap->session->set_output_driver(std::move(capture));
 
-    auto display = std::make_unique<CapturingDisplayDriver>();
-    wrap->display = display.get();
-    wrap->session->set_display_driver(std::move(display));
+    /* DisplayDriver: ONLY for interactive / IPR. cycles_standalone in
+     * background mode never installs one (app/cycles_standalone.cpp
+     * gates set_display_driver behind !session_params.background).
+     * On macOS arm64 CPU, installing a DisplayDriver in headless mode
+     * caused the kernel to write only zero-radiance samples (alpha=1
+     * accumulated, but RGB stayed at the buffer's init zero), turning
+     * the rendered image into pure black. Mirror standalone's gating
+     * here so the headless path matches what works upstream. */
+    if (params->interactive) {
+        auto display = std::make_unique<CapturingDisplayDriver>();
+        wrap->display = display.get();
+        wrap->session->set_display_driver(std::move(display));
+    }
 
     /* Default pass: a single COMBINED pass. Required for image output. */
     ccl::Scene *scene = wrap->session->scene.get();
