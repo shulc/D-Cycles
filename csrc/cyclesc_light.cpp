@@ -20,10 +20,14 @@
 #include "scene/object.h"
 #include "scene/scene.h"
 #include "scene/shader.h"
+#include "scene/shader_graph.h"
+#include "scene/shader_nodes.h"
 
 #include "util/array.h"
 #include "util/transform.h"
 #include "util/types.h"
+
+#include <memory>
 
 using namespace cyc_internal;
 
@@ -53,12 +57,33 @@ cyc_status cyc_light_create(cyc_scene_t *scene_h, cyc_light_type type, cyc_light
         light->set_is_enabled(true);
         light->set_use_mis(true);
 
-        /* Attach the scene's default emission shader. cyc_light_set_color
-         * and cyc_light_set_intensity scale `strength` rather than
-         * editing this shader, which is the simplest correct API. */
+        /* Per-light emission shader with strength=1. We can't reuse
+         * `scene->default_light` here — its built-in EmissionNode
+         * carries strength=0, which propagates into the Shader's
+         * `emission_estimate` and trips `Light::is_lit()`'s
+         * `!is_zero(emission_estimate)` guard, making Cycles skip
+         * the light entirely. Symptom on macOS arm64 CPU: rays hit
+         * the triangle (alpha=1) but no light reaches it, so the
+         * Principled BSDF evaluates to zero RGB — the rendered PNG
+         * is black. Linux x64 happened to evaluate the same code
+         * path slightly differently and rendered the triangle lit;
+         * either way, owning the emission shader is the correct
+         * primitive. cyc_light_set_color / set_intensity continue
+         * to drive Light::strength as the multiplier. */
+        auto lightGraph = std::make_unique<ccl::ShaderGraph>();
+        auto *emission = lightGraph->create_node<ccl::EmissionNode>();
+        emission->set_color(ccl::make_float3(1.0f, 1.0f, 1.0f));
+        emission->set_strength(1.0f);
+        if (auto *surf_in = lightGraph->output()->input("Surface")) {
+            lightGraph->connect(emission->output("Emission"), surf_in);
+        }
+        ccl::Shader *lightShader = scene->create_node<ccl::Shader>();
+        lightShader->name = "light_emission";
+        lightShader->set_graph(std::move(lightGraph));
+        lightShader->tag_update(scene);
         ccl::array<ccl::Node *> shaders;
         shaders.resize(1);
-        shaders[0] = static_cast<ccl::Node *>(scene->default_light);
+        shaders[0] = static_cast<ccl::Node *>(lightShader);
         light->set_used_shaders(shaders);
 
         ccl::Object *obj = scene->create_node<ccl::Object>();
