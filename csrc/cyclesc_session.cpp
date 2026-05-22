@@ -377,12 +377,21 @@ cyc_status cyc_session_create(const cyc_session_params *params, cyc_session_t **
 
     ccl::SessionParams sp;
     sp.device      = devices[idx];
-    /* headless=true forces RenderScheduler::work_need_update_display
-     * to return false (render_scheduler.cpp:1027), which means
-     * PathTrace::update_display never invokes OutputDriver::update_render_tile.
-     * For interactive IPR we need progressive tiles to flow into the
-     * driver — leave headless OFF when interactive is requested. */
-    sp.headless    = (params->interactive == 0);
+    /* background — toggles the path-trace scheduler between
+     * "finish-N-samples-then-stop" (true, batch) and
+     * "render-continuously" (false, IPR). Mirror standalone's
+     * --background flag.
+     *
+     * headless — stays at the default (false). Standalone's
+     * --background never touches headless; we used to set
+     * headless=true to suppress display-driver tile pushes, but
+     * that triggered a code path on macOS arm64 CPU where every
+     * sample landed with RGB=0 / alpha=1 (rendered image was
+     * pure black even though sample weight accumulated). The
+     * matching fix is to drop the unconditional headless=true
+     * AND only install the DisplayDriver in interactive mode
+     * (see set_display_driver gating below). */
+    sp.headless    = false;
     sp.background  = (params->interactive == 0);
     /* Progressive resolution divider starts rendering at w/8 x h/8 and
      * walks up to full res. Writes a small dense tile at the top of the
