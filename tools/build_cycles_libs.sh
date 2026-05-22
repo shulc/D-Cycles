@@ -145,9 +145,13 @@ if [[ "${1:-}" == "--reconfigure" ]] || [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]
         )
     fi
 
-    # Metal: enabled by default on macOS, disable elsewhere.
-    if [[ "$OSTYPE" == "darwin"* ]] && [[ "${NO_METAL:-0}" != "1" ]]; then
-        echo ">>> Metal device enabled (macOS); set NO_METAL=1 to disable"
+    # Metal: opt-in on macOS via WITH_METAL=1 (mirrors WITH_CUDA on
+    # Linux/Windows). Default off because Cycles' metal kernel build
+    # has fragile path expectations — easier to ship a working CPU
+    # baseline first and let users flip the toggle when their setup
+    # is ready. CPU rendering on macOS works regardless of this.
+    if [[ "$OSTYPE" == "darwin"* ]] && [[ "${WITH_METAL:-0}" == "1" ]]; then
+        echo ">>> Metal device enabled (macOS, opt-in via WITH_METAL=1)"
         METAL_ARG="-DWITH_CYCLES_DEVICE_METAL=ON"
     else
         METAL_ARG="-DWITH_CYCLES_DEVICE_METAL=OFF"
