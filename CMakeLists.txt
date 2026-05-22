@@ -198,7 +198,10 @@ if(WITH_CYCLES)
     # today — extend both places together when adding those hosts.
 
     if(_d_cycles_need_sse2neon)
-        set(_SSE2NEON_INCLUDE "${LIBDIR}/sse2neon/include")
+        # Blender's macOS precompiled deps ship sse2neon.h at the root of
+        # lib/macos_arm64/sse2neon/ (not under include/) — confirmed against
+        # an actual macOS checkout.
+        set(_SSE2NEON_INCLUDE "${LIBDIR}/sse2neon")
         if(NOT EXISTS "${_SSE2NEON_INCLUDE}/sse2neon.h")
             message(FATAL_ERROR
                 "sse2neon.h not found at ${_SSE2NEON_INCLUDE}. "
