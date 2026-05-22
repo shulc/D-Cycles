@@ -10,9 +10,14 @@
 
 #include "device/device.h"
 #include "scene/background.h"
+#include "scene/geometry.h"
 #include "scene/integrator.h"
+#include "scene/light.h"
+#include "scene/mesh.h"
+#include "scene/object.h"
 #include "scene/pass.h"
 #include "scene/scene.h"
+#include "scene/shader.h"
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
 #include "session/buffers.h"
@@ -564,6 +569,85 @@ cyc_status cyc_session_reset(cyc_session_t *h, int w, int height)
         pass->set_type(ccl::PASS_COMBINED);
 
         wrap->deferred_init_done = true;
+    }
+
+    /* CYC_SCENE_DUMP=1 — dump scene state right before session->reset
+     * to diagnose "rendered all black" reports. Prints geometry/object/
+     * shader/light counts, plus per-mesh used_shaders pointers and
+     * per-light type+strength. Compare against a known-good run to
+     * spot missing or null entries. */
+    if (std::getenv("CYC_SCENE_DUMP") != nullptr) {
+        ccl::Scene *s = wrap->session->scene.get();
+        std::fprintf(stderr, "[cyc:dump] === scene state pre-reset ===\n");
+        std::fprintf(stderr, "[cyc:dump] geometry=%zu objects=%zu shaders=%zu passes=%zu\n",
+            s->geometry.size(), s->objects.size(),
+            s->shaders.size(), s->passes.size());
+        if (s->camera) {
+            const ccl::Transform &t = s->camera->get_matrix();
+            std::fprintf(stderr,
+                "[cyc:dump] camera: type=%d full=%dx%d fov=%.3f matrix:\n"
+                "          x=(%.3f %.3f %.3f %.3f)\n"
+                "          y=(%.3f %.3f %.3f %.3f)\n"
+                "          z=(%.3f %.3f %.3f %.3f)\n",
+                (int)s->camera->get_camera_type(),
+                s->camera->get_full_width(), s->camera->get_full_height(),
+                s->camera->get_fov(),
+                t.x.x, t.x.y, t.x.z, t.x.w,
+                t.y.x, t.y.y, t.y.z, t.y.w,
+                t.z.x, t.z.y, t.z.z, t.z.w);
+        } else {
+            std::fprintf(stderr, "[cyc:dump] camera: NULL (no active camera!)\n");
+        }
+        for (size_t i = 0; i < s->geometry.size(); ++i) {
+            ccl::Geometry *g = s->geometry[i];
+            const auto &us = g->get_used_shaders();
+            std::fprintf(stderr, "[cyc:dump] geom[%zu] type=%d used_shaders=%zu",
+                i, (int)g->geometry_type, us.size());
+            for (size_t j = 0; j < us.size(); ++j) {
+                std::fprintf(stderr, " s%zu=%p", j, (void*)us[j]);
+            }
+            if (auto *m = dynamic_cast<ccl::Mesh *>(g)) {
+                std::fprintf(stderr, " verts=%zu tris=%zu",
+                    m->get_verts().size(), m->num_triangles());
+            }
+            std::fprintf(stderr, "\n");
+        }
+        for (size_t i = 0; i < s->objects.size(); ++i) {
+            ccl::Object *o = s->objects[i];
+            const ccl::Transform &t = o->get_tfm();
+            std::fprintf(stderr,
+                "[cyc:dump] obj[%zu] geom=%p vis=%u tfm.t=(%.3f,%.3f,%.3f)\n",
+                i, (void*)o->get_geometry(), o->get_visibility(),
+                t.x.w, t.y.w, t.z.w);
+        }
+        for (size_t i = 0; i < s->shaders.size(); ++i) {
+            ccl::Shader *sh = s->shaders[i];
+            const size_t nodes = sh->graph ? sh->graph->nodes.size() : 0;
+            std::fprintf(stderr,
+                "[cyc:dump] shader[%zu] name='%s' graph_nodes=%zu\n",
+                i, sh->name.c_str(), nodes);
+            if (sh->graph) {
+                for (auto *n : sh->graph->nodes) {
+                    std::fprintf(stderr,
+                        "[cyc:dump]   node type='%s'\n", n->type->name.c_str());
+                }
+            }
+        }
+        /* Lights are Geometry subclass — iterate s->geometry and
+         * dynamic_cast<Light *>. */
+        for (size_t i = 0; i < s->geometry.size(); ++i) {
+            auto *l = dynamic_cast<ccl::Light *>(s->geometry[i]);
+            if (!l) continue;
+            const ccl::float3 str = l->get_strength();
+            std::fprintf(stderr,
+                "[cyc:dump] light(geom[%zu]) type=%d strength=(%.2f,%.2f,%.2f) "
+                "enabled=%d use_mis=%d used_shaders=%zu\n",
+                i, (int)l->get_light_type(),
+                str.x, str.y, str.z,
+                (int)l->get_is_enabled(), (int)l->get_use_mis(),
+                l->get_used_shaders().size());
+        }
+        std::fflush(stderr);
     }
 
     wrap->session->reset(wrap->session->params, wrap->buffer_params);
