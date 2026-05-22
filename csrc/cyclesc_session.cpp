@@ -535,59 +535,33 @@ cyc_status cyc_session_reset(cyc_session_t *h, int w, int height)
         scene->camera->set_viewplane_bottom(scene->camera->viewplane.bottom);
     }
 
-    /* Deferred init — runs ONCE on the first session_reset call. We
-     * delay these until the caller has already populated the scene
-     * (geometry / lights / shaders / camera) because macOS arm64 CPU
-     * reproducibly renders zero-radiance samples (alpha=1 accumulates
-     * but RGB stays at the buffer's init zero) when these are done at
-     * cyc_session_create time before any user content lands. The
-     * standalone cycles app (which works fine on macOS arm64 CPU)
-     * does its analogous setup right here: create Pass, integrator
-     * tweaks, world-shader prep — all after scene_init() and before
-     * session->reset(). Mirror that order. Linux x64 tolerated the
-     * pre-content init; the late init keeps Linux working too. */
+    /* Deferred init — runs ONCE on the first session_reset call.
+     *
+     * Mirrors cycles_standalone.cpp session_init() exactly: a single
+     * Pass node with name="combined" + type=PASS_COMBINED, created
+     * after the caller has populated the scene and immediately before
+     * session->reset(). Standalone is the known-good reference on
+     * macOS arm64 CPU (verified by the user with a minimal XML scene),
+     * so we copy its order and DON'T sprinkle additional tweaks that
+     * upstream doesn't do:
+     *
+     *   - integrator min/max bounce: leave at engine defaults
+     *     (max_bounce=12). Tweaking it produced zero-radiance samples
+     *     on macOS arm64 CPU.
+     *   - default_background graph: we used to replace the world
+     *     shader here with a dark-gray BackgroundNode. Standalone
+     *     leaves it alone (XML <world> tag sets it, or it stays at
+     *     Cycles' built-in default). Replacing the graph
+     *     post-Scene-init confused macOS arm64 (RGB stayed zero).
+     *   - default_light graph: same issue. Per-light shaders are
+     *     attached by cyc_light_create via light->used_shaders, so
+     *     scene->default_light is unused anyway. */
     if (!wrap->deferred_init_done) {
         ccl::Scene *scene_now = wrap->session->scene.get();
 
         ccl::Pass *pass = scene_now->create_node<ccl::Pass>();
         pass->set_name(ccl::ustring("combined"));
         pass->set_type(ccl::PASS_COMBINED);
-
-        if (scene_now->integrator) {
-            scene_now->integrator->set_min_bounce(0);
-            scene_now->integrator->set_max_bounce(8);
-        }
-
-        {
-            /* CYC_BG_DEBUG=1 — paint default_background bright magenta.
-             * Diagnostic for "black render" reports; left in to help
-             * isolate background- vs surface-shading issues. */
-            const bool bg_debug = std::getenv("CYC_BG_DEBUG") != nullptr;
-            auto bg_graph = std::make_unique<ccl::ShaderGraph>();
-            auto *bg = bg_graph->create_node<ccl::BackgroundNode>();
-            if (bg_debug) {
-                bg->set_color(ccl::make_float3(1.0f, 0.0f, 1.0f));
-                bg->set_strength(5.0f);
-            } else {
-                bg->set_color(ccl::make_float3(0.05f, 0.05f, 0.05f));
-                bg->set_strength(1.0f);
-            }
-            bg_graph->connect(bg->output("Background"),
-                              bg_graph->output()->input("Surface"));
-            scene_now->default_background->set_graph(std::move(bg_graph));
-            scene_now->default_background->tag_update(scene_now);
-        }
-
-        {
-            auto light_graph = std::make_unique<ccl::ShaderGraph>();
-            auto *em = light_graph->create_node<ccl::EmissionNode>();
-            em->set_color(ccl::make_float3(1.0f, 1.0f, 1.0f));
-            em->set_strength(1.0f);
-            light_graph->connect(em->output("Emission"),
-                                 light_graph->output()->input("Surface"));
-            scene_now->default_light->set_graph(std::move(light_graph));
-            scene_now->default_light->tag_update(scene_now);
-        }
 
         wrap->deferred_init_done = true;
     }
